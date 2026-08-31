@@ -10,8 +10,16 @@
   const CONFIG = {
     BACKEND_URL: "https://script.google.com/macros/s/AKfycbzvnPVHqRKhJZO8Qd3vtyF0K5_rYYwYTDWXCBZAZZFAZjqgTsBnx1dux6d2KM0PjYGkNA/exec",
     APP_NAME: "SARKSH Portal",
-    VIDEO_MAX_MB: 8,
-    BUILD: "3.0.0"
+    VIDEO_MAX_MB: 3,
+    BUILD: "5.0.0"
+  };
+
+
+  const RTC_CONFIG = {
+    iceServers: [
+      {urls:"stun:stun.l.google.com:19302"},
+      {urls:"stun:stun1.l.google.com:19302"}
+    ]
   };
 
   const CUSTOMER_KEY = "sarksh_customer_session";
@@ -136,27 +144,225 @@
   async function initRegistration() {
     const form = $("registerForm"), msg = $("message");
     if (!form) return;
-    form.addEventListener("submit", async e => {
-      e.preventDefault();
-      const f = new FormData(form);
-      if (f.get("password") !== f.get("confirm_password")) {
-        return setMessage(msg, "Passwords do not match.", "error");
-      }
-      setMessage(msg, "Creating account…");
-      try {
-        const r = await api("registerCustomer", {
-          full_name: f.get("full_name"),
-          mobile: f.get("mobile"),
-          email: f.get("email"),
-          password: f.get("password")
+
+    let registrationToken = "";
+    let agreement = null;
+    let localStream = null;
+    let peer = null;
+    let liveSessionId = "";
+    let statusTimer = null;
+    let signalTimer = null;
+    let lastSignalSeq = 0;
+    let customerOfferSent = false;
+    let pendingIce = [];
+
+    const statusCard = $("liveKycStatus");
+    const setLiveStatus = (title, subtitle, cls="") => {
+      if(!statusCard) return;
+      statusCard.className = `waiting-card ${cls}`.trim();
+      statusCard.innerHTML = `<div class="waiting-dot"></div><div><b>${esc(title)}</b><span>${esc(subtitle||"")}</span></div>`;
+    };
+
+    const stopTimers = () => {
+      if(statusTimer) clearInterval(statusTimer);
+      if(signalTimer) clearInterval(signalTimer);
+      statusTimer = signalTimer = null;
+    };
+    const closeMedia = () => {
+      stopTimers();
+      try{peer?.close();}catch(_){}
+      peer = null;
+      localStream?.getTracks().forEach(t=>t.stop());
+      localStream = null;
+      if($("customerLocalVideo")) $("customerLocalVideo").srcObject = null;
+      if($("customerRemoteVideo")) $("customerRemoteVideo").srcObject = null;
+      $("leaveLiveKyc").disabled = true;
+    };
+
+    async function sendCustomerSignal(type,payload) {
+      return api("liveKycSignalSend",{
+        registration_token:registrationToken,
+        session_id:liveSessionId,
+        participant:"CUSTOMER",
+        type,
+        payload_json:JSON.stringify(payload)
+      });
+    }
+
+    async function flushCustomerIce() {
+      if(!peer?.remoteDescription) return;
+      const items=[...pendingIce]; pendingIce=[];
+      for(const c of items){try{await peer.addIceCandidate(c);}catch(_){}}
+    }
+
+    async function startCustomerPeer() {
+      if(customerOfferSent || !localStream || !liveSessionId) return;
+      customerOfferSent = true;
+      peer = new RTCPeerConnection(RTC_CONFIG);
+      localStream.getTracks().forEach(t=>peer.addTrack(t,localStream));
+      peer.ontrack = ev => {
+        const stream=ev.streams?.[0];
+        if(stream) $("customerRemoteVideo").srcObject=stream;
+      };
+      peer.onicecandidate = ev => {
+        if(ev.candidate) sendCustomerSignal("ICE",ev.candidate.toJSON ? ev.candidate.toJSON() : ev.candidate).catch(()=>{});
+      };
+      peer.onconnectionstatechange = () => {
+        const s=peer.connectionState;
+        if(s==="connected") {
+          setLiveStatus("Live with verification agent","The agent can now complete your verification.","live");
+          setMessage($("videoMessage"),"Secure peer-to-peer live connection established.","success");
+        } else if(["failed","disconnected"].includes(s)) {
+          setLiveStatus("Connection interrupted","Keep this page open while the call reconnects.","waiting");
+        }
+      };
+      const offer=await peer.createOffer({offerToReceiveAudio:true,offerToReceiveVideo:true});
+      await peer.setLocalDescription(offer);
+      await sendCustomerSignal("OFFER",{type:offer.type,sdp:offer.sdp});
+    }
+
+    async function pollCustomerSignals() {
+      if(!liveSessionId) return;
+      try{
+        const r=await api("liveKycSignalPoll",{
+          registration_token:registrationToken,
+          session_id:liveSessionId,
+          participant:"CUSTOMER",
+          after_seq:lastSignalSeq
         });
-        setMessage(msg, `Account created. Customer ID: ${r.customer_id}. You can now sign in.`, "success");
-        form.reset();
-      } catch (err) {
-        setMessage(msg, err.message, "error");
+        for(const s of (r.signals||[])){
+          lastSignalSeq=Math.max(lastSignalSeq,Number(s.seq||0));
+          const payload=JSON.parse(s.payload_json||"{}");
+          if(s.type==="ANSWER" && peer && !peer.remoteDescription){
+            await peer.setRemoteDescription(payload);
+            await flushCustomerIce();
+          } else if(s.type==="ICE"){
+            const cand=new RTCIceCandidate(payload);
+            if(peer?.remoteDescription) { try{await peer.addIceCandidate(cand);}catch(_){} }
+            else pendingIce.push(cand);
+          }
+        }
+      }catch(err){
+        console.warn("KYC signal poll:",err.message);
       }
+    }
+
+    async function pollLiveStatus() {
+      if(!liveSessionId) return;
+      try{
+        const r=await api("liveKycStatus",{registration_token:registrationToken,session_id:liveSessionId});
+        const s=r.session;
+        if(s.status==="WAITING_AGENT"){
+          setLiveStatus("Waiting for a SARKSH verification agent",`Queue position: ${r.queue_position || 1}. Keep this page open.`,"waiting");
+        } else if(s.status==="AGENT_JOINING"){
+          setLiveStatus("Agent accepted your verification","Connecting the secure live call…","waiting");
+          await startCustomerPeer();
+        } else if(s.status==="LIVE"){
+          setLiveStatus("Live verification in progress","Stay on camera until the agent completes the verification.","live");
+          await startCustomerPeer();
+        } else if(s.status==="COMPLETED"){
+          stopTimers();
+          const result=String(s.result||"");
+          if(result==="VERIFIED"){
+            setLiveStatus("Verification approved","Your account is now active.","live");
+            setMessage($("videoMessage"),"Live KYC verified. Redirecting to login…","success");
+            setTimeout(()=>location.href="login.html",1800);
+          } else if(result==="RESUBMIT"){
+            setLiveStatus("Re-verification requested","The agent requested another live verification session.","waiting");
+            setMessage($("videoMessage"),s.remarks||"Please rejoin the verification queue.","error");
+            $("joinLiveKyc").textContent="Rejoin Verification Queue";
+            $("joinLiveKyc").disabled=false;
+            liveSessionId="";
+            customerOfferSent=false;
+            try{peer?.close();}catch(_){}
+            peer=null;
+          } else {
+            setLiveStatus("Verification not approved",s.remarks||"Please contact SARKSH support.","failed");
+            setMessage($("videoMessage"),s.remarks||"Verification was not approved.","error");
+          }
+        }
+      }catch(err){
+        if(/expired/i.test(err.message)){
+          closeMedia();
+          setLiveStatus("Verification session expired","Restart registration to continue.","failed");
+        }
+      }
+    }
+
+    try {
+      api("getRegistrationAgreement").then(r=>{
+        agreement=r.agreement;
+        $("agreementVersion").value=agreement.version||"";
+        $("agreementHash").value=agreement.hash||"";
+        $("agreementBox").textContent=agreement.text||"Agreement is not configured.";
+        $("agreementState").innerHTML=`<b>${esc(agreement.title||"Registration Agreement")} · ${esc(agreement.version||"")}</b>
+          <p>${agreement.ready?"Read the complete agreement below before accepting.":"The agreement is not active yet. Registration is disabled until the Super Admin publishes it."}</p>`;
+        if(!agreement.ready)$("agreementBox").classList.add("not-ready");
+        $("beginRegistration").disabled=!agreement.ready;
+      }).catch(err=>{
+        $("agreementBox").textContent="Unable to load the agreement.";
+        $("agreementBox").classList.add("not-ready");
+        setMessage(msg,err.message,"error");
+      });
+    } catch(_) {}
+
+    form.addEventListener("submit",async e=>{
+      e.preventDefault();
+      if(!agreement?.ready)return setMessage(msg,"Registration agreement is not active yet.","error");
+      const f=new FormData(form);
+      if(f.get("password")!==f.get("confirm_password"))return setMessage(msg,"Passwords do not match.","error");
+      if(String(f.get("accepted_name")||"").trim().toLowerCase()!==String(f.get("full_name")||"").trim().toLowerCase())
+        return setMessage(msg,"The typed agreement name must match the full legal name.","error");
+
+      setMessage(msg,"Securing account, KYC and agreement acceptance…");
+      try{
+        const r=await api("registerCustomer",{
+          full_name:f.get("full_name"),mobile:f.get("mobile"),email:f.get("email"),
+          password:f.get("password"),pan:String(f.get("pan")||"").toUpperCase(),
+          dob:f.get("dob"),address:f.get("address"),identity_ref:f.get("identity_ref"),
+          agreement_hash:f.get("agreement_hash"),agreement_version:f.get("agreement_version"),
+          accepted_name:f.get("accepted_name"),agreement_consent:Boolean(f.get("agreement_consent")),
+          user_agent:navigator.userAgent
+        });
+        registrationToken=r.registration_token;
+        form.querySelectorAll("input,textarea,button").forEach(el=>el.disabled=true);
+        $("liveKycPanel").classList.add("unlocked");
+        $("joinLiveKyc").disabled=false;
+        setLiveStatus("Ready for live verification","Start your camera and join the verification queue.");
+        setMessage(msg,`Registration secured. Customer reference: ${r.customer_id}. Complete live agent verification to activate the account.`,"success");
+      }catch(err){setMessage(msg,err.message,"error");}
     });
+
+    $("joinLiveKyc")?.addEventListener("click",async()=>{
+      if(!registrationToken)return;
+      try{
+        if(!localStream){
+          localStream=await navigator.mediaDevices.getUserMedia({
+            video:{width:{ideal:640},height:{ideal:480},frameRate:{ideal:15,max:24}},
+            audio:{echoCancellation:true,noiseSuppression:true}
+          });
+          $("customerLocalVideo").srcObject=localStream;
+        }
+        const r=await api("createLiveKycSession",{registration_token:registrationToken});
+        liveSessionId=r.session_id;
+        lastSignalSeq=0;customerOfferSent=false;pendingIce=[];
+        $("joinLiveKyc").disabled=true;
+        $("leaveLiveKyc").disabled=false;
+        setLiveStatus("Waiting for a SARKSH verification agent","Keep this tab open. An authorised agent will connect shortly.","waiting");
+        await pollLiveStatus();
+        statusTimer=setInterval(pollLiveStatus,3000);
+        signalTimer=setInterval(pollCustomerSignals,1500);
+      }catch(err){setMessage($("videoMessage"),err.message,"error");}
+    });
+
+    $("leaveLiveKyc")?.addEventListener("click",()=>{
+      closeMedia();
+      setLiveStatus("You left the live call","Reload the page if you need to restart verification.","failed");
+    });
+
+    window.addEventListener("beforeunload",()=>closeMedia());
   }
+
 
   function drawChart(canvas, values) {
     if (!canvas || !values?.length) return;
@@ -605,6 +811,198 @@
     });
   }
 
+
+  async function initAgreementAdmin() {
+    const form=$("agreementAdminForm");
+    if(!form) return;
+    try{
+      const r=await adminCall("adminAgreementGet");
+      const a=r.agreement||{};
+      form.title.value=a.title||"";
+      form.version.value=a.version||"";
+      form.text.value=a.text||"";
+      form.ready.checked=Boolean(a.ready);
+      const pill=$("agreementReadyPill");
+      pill.textContent=a.ready?"ACTIVE":"NOT ACTIVE";
+      pill.className=`status-pill ${a.ready?"success":"warning"}`;
+    }catch(err){if(!sessionFailure(err))setMessage($("agreementAdminMessage"),err.message,"error");}
+
+    form.addEventListener("submit",async e=>{
+      e.preventDefault();
+      const f=new FormData(form);
+      try{
+        const r=await adminCall("adminAgreementSave",{
+          title:f.get("title"),version:f.get("version"),text:f.get("text"),
+          ready:Boolean(f.get("ready"))
+        });
+        setMessage($("agreementAdminMessage"),`Agreement saved. SHA-256: ${r.hash}`,"success");
+        const pill=$("agreementReadyPill");
+        pill.textContent=r.ready?"ACTIVE":"NOT ACTIVE";
+        pill.className=`status-pill ${r.ready?"success":"warning"}`;
+      }catch(err){setMessage($("agreementAdminMessage"),err.message,"error");}
+    });
+  }
+
+
+  async function initAdminLiveKyc() {
+    const queue=$("liveKycQueue");
+    if(!queue) return;
+
+    let activeSessionId="";
+    let localStream=null;
+    let peer=null;
+    let queueTimer=null;
+    let signalTimer=null;
+    let lastSignalSeq=0;
+    let pendingIce=[];
+    let customerOfferHandled=false;
+
+    const statusPill=$("agentCallStatus");
+    const setAgentStatus=(text,cls="")=>{
+      statusPill.textContent=text;
+      statusPill.className=`status-pill ${cls}`.trim();
+    };
+    const stopSignal=()=>{if(signalTimer)clearInterval(signalTimer);signalTimer=null;};
+    const closePeer=()=>{
+      stopSignal();
+      try{peer?.close();}catch(_){}
+      peer=null;customerOfferHandled=false;pendingIce=[];lastSignalSeq=0;
+      localStream?.getTracks().forEach(t=>t.stop());localStream=null;
+      if($("agentLocalVideo"))$("agentLocalVideo").srcObject=null;
+      if($("agentRemoteVideo"))$("agentRemoteVideo").srcObject=null;
+      ["markVerified","markResubmit","markRejected"].forEach(id=>{$(id).disabled=true;});
+    };
+
+    async function sendAgentSignal(type,payload){
+      return adminCall("liveKycSignalSend",{
+        session_id:activeSessionId,participant:"AGENT",type,payload_json:JSON.stringify(payload)
+      });
+    }
+    async function flushAgentIce(){
+      if(!peer?.remoteDescription)return;
+      const q=[...pendingIce];pendingIce=[];
+      for(const c of q){try{await peer.addIceCandidate(c);}catch(_){}}
+    }
+    async function ensureAgentMedia(){
+      if(localStream)return;
+      localStream=await navigator.mediaDevices.getUserMedia({
+        video:{width:{ideal:640},height:{ideal:480},frameRate:{ideal:15,max:24}},
+        audio:{echoCancellation:true,noiseSuppression:true}
+      });
+      $("agentLocalVideo").srcObject=localStream;
+    }
+    async function handleCustomerOffer(desc){
+      if(customerOfferHandled)return;
+      customerOfferHandled=true;
+      await ensureAgentMedia();
+      peer=new RTCPeerConnection(RTC_CONFIG);
+      localStream.getTracks().forEach(t=>peer.addTrack(t,localStream));
+      peer.ontrack=ev=>{const s=ev.streams?.[0];if(s)$("agentRemoteVideo").srcObject=s;};
+      peer.onicecandidate=ev=>{if(ev.candidate)sendAgentSignal("ICE",ev.candidate.toJSON?ev.candidate.toJSON():ev.candidate).catch(()=>{});};
+      peer.onconnectionstatechange=async()=>{
+        const s=peer.connectionState;
+        if(s==="connected"){
+          setAgentStatus("LIVE","success");
+          ["markVerified","markResubmit","markRejected"].forEach(id=>{$(id).disabled=false;});
+          try{await adminCall("agentMarkLiveKycConnected",{session_id:activeSessionId});}catch(_){}
+          setMessage($("agentLiveMessage"),"Live peer-to-peer KYC connection established.","success");
+        }else if(["failed","disconnected"].includes(s)){
+          setAgentStatus("Connection interrupted","warning");
+        }
+      };
+      await peer.setRemoteDescription(desc);
+      await flushAgentIce();
+      const answer=await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      await sendAgentSignal("ANSWER",{type:answer.type,sdp:answer.sdp});
+    }
+    async function pollAgentSignals(){
+      if(!activeSessionId)return;
+      try{
+        const r=await adminCall("liveKycSignalPoll",{
+          session_id:activeSessionId,participant:"AGENT",after_seq:lastSignalSeq
+        });
+        for(const s of (r.signals||[])){
+          lastSignalSeq=Math.max(lastSignalSeq,Number(s.seq||0));
+          const payload=JSON.parse(s.payload_json||"{}");
+          if(s.type==="OFFER") await handleCustomerOffer(payload);
+          else if(s.type==="ICE"){
+            const cand=new RTCIceCandidate(payload);
+            if(peer?.remoteDescription){try{await peer.addIceCandidate(cand);}catch(_){}}
+            else pendingIce.push(cand);
+          }
+        }
+      }catch(err){console.warn("Agent KYC signal:",err.message);}
+    }
+
+    async function loadQueue(){
+      try{
+        const r=await adminCall("agentLiveKycQueue");
+        const items=r.sessions||[];
+        $("liveQueuePill").textContent=`${items.filter(x=>x.status==="WAITING_AGENT").length} waiting`;
+        $("liveQueuePill").className=`status-pill ${items.some(x=>x.status==="WAITING_AGENT")?"warning":"success"}`;
+        queue.innerHTML=items.map(x=>`
+          <div class="live-queue-item ${x.status==="WAITING_AGENT"?"waiting":"mine"}">
+            <h3>${esc(x.full_name)} · ${esc(x.customer_id)}</h3>
+            <div class="live-queue-meta">
+              <span>${esc(x.status)}</span><span>${esc(x.email)}</span><span>PAN ${esc(x.pan_masked||"—")}</span>
+              <span>Waiting ${esc(x.wait_minutes)} min</span>
+            </div>
+            <button class="btn ${x.status==="WAITING_AGENT"?"primary":"secondary"}" data-live-session="${esc(x.session_id)}">
+              ${x.status==="WAITING_AGENT"?"Accept & Join":"Open Session"}
+            </button>
+          </div>`).join("") || '<div class="alert success">No customers are waiting for live verification.</div>';
+      }catch(err){
+        if(!sessionFailure(err))queue.innerHTML=`<div class="alert danger">${esc(err.message)}</div>`;
+      }
+    }
+
+    queue.addEventListener("click",async e=>{
+      const id=e.target.dataset.liveSession;if(!id)return;
+      try{
+        closePeer();
+        const r=await adminCall("agentAcceptLiveKyc",{session_id:id});
+        activeSessionId=id;
+        $("agentCallTitle").textContent=`${r.customer.full_name} · ${r.customer.customer_id}`;
+        $("agentCustomerSummary").innerHTML=[
+          ["Email",r.customer.email],["Mobile",r.customer.mobile],["PAN",r.customer.pan_masked],
+          ["DOB",r.customer.dob],["Address",r.customer.address],["Agreement",r.customer.agreement_version]
+        ].map(([k,v])=>`<div class="detail-item"><small>${esc(k)}</small><b>${esc(v||"—")}</b></div>`).join("");
+        setAgentStatus("Waiting for customer connection","warning");
+        setMessage($("agentLiveMessage"),"Session accepted. Waiting for the customer's WebRTC offer…");
+        await ensureAgentMedia();
+        signalTimer=setInterval(pollAgentSignals,1200);
+        await pollAgentSignals();
+        await loadQueue();
+      }catch(err){setMessage($("agentLiveMessage"),err.message,"error");}
+    });
+
+    async function finish(result){
+      if(!activeSessionId)return;
+      const remarks=$("liveKycRemarks").value||"";
+      if(!remarks && result!=="VERIFIED") {
+        return setMessage($("agentLiveMessage"),"Enter remarks before requesting re-verification or rejecting.","error");
+      }
+      try{
+        await adminCall("agentCompleteLiveKyc",{session_id:activeSessionId,result,remarks});
+        setMessage($("agentLiveMessage"),
+          result==="VERIFIED"?"Customer verified and account activated.":`Live KYC closed with result: ${result}.`,
+          result==="VERIFIED"?"success":"error");
+        setAgentStatus("Completed",result==="VERIFIED"?"success":"warning");
+        closePeer();activeSessionId="";$("liveKycRemarks").value="";
+        await loadQueue();
+      }catch(err){setMessage($("agentLiveMessage"),err.message,"error");}
+    }
+    $("markVerified").addEventListener("click",()=>finish("VERIFIED"));
+    $("markResubmit").addEventListener("click",()=>finish("RESUBMIT"));
+    $("markRejected").addEventListener("click",()=>finish("REJECTED"));
+    $("refreshLiveQueue").addEventListener("click",loadQueue);
+
+    await loadQueue();
+    queueTimer=setInterval(loadQueue,4000);
+    window.addEventListener("beforeunload",()=>{if(queueTimer)clearInterval(queueTimer);closePeer();});
+  }
+
   async function boot() {
     await initCustomerLogin();
     await initRegistration();
@@ -622,6 +1020,8 @@
     await initAccounts();
     initReports();
     await initAdmins();
+    await initAgreementAdmin();
+    await initAdminLiveKyc();
   }
 
   boot().catch(err => {

@@ -51,3 +51,47 @@ dialog{border:0;border-radius:18px;padding:28px;box-shadow:var(--shadow);width:m
 
 .auth-steps{display:flex;align-items:center;gap:8px;margin:24px 0}.auth-steps i{height:2px;flex:1;background:#dfe7e2}.auth-step{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;border:1px solid #cfd9d3;color:#6a756f;font-weight:800}.auth-step.active{background:var(--green);color:#fff;border-color:var(--green)}
 .security-callout{background:#f1f7f4;border:1px solid #d6e7de;border-radius:12px;padding:14px;margin:12px 0 18px}.security-callout b{display:block;margin-bottom:6px}.security-callout p{font-size:13px;color:var(--muted)}.microcopy{font-size:11px;line-height:1.5;color:var(--muted);margin-top:24px}.top-statuses{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.legal-note{font-size:12px;color:var(--muted);background:#fff;border:1px solid var(--line);padding:12px 14px;border-radius:12px}
+
+
+/* V4 unified registration + KYC onboarding */
+.onboarding-shell{min-height:100vh;padding:24px 32px 50px;background:linear-gradient(180deg,#f8faf9 0,#eef3f0 100%)}
+.onboarding-header{max-width:1280px;margin:0 auto 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.onboarding-brand{display:flex;align-items:center;gap:12px;color:var(--ink)}
+.onboarding-brand img{width:54px;height:54px;border-radius:50%;background:#fff;border:1px solid var(--line)}
+.onboarding-brand b{display:block;letter-spacing:.12em}.onboarding-brand span{display:block;color:var(--muted);font-size:12px;margin-top:3px}
+.onboarding-hero{max-width:1280px;margin:0 auto 22px;background:linear-gradient(135deg,#073e29,#005d3b);color:#fff;border-radius:24px;padding:32px 36px;box-shadow:var(--shadow)}
+.onboarding-hero .eyebrow{color:#b9d7c9}.onboarding-hero h1{font-size:34px;margin:0 0 10px;max-width:850px}.onboarding-hero p{color:#dbe9e2;max-width:900px}
+.onboarding-progress{display:flex;align-items:center;gap:10px;margin-top:24px;max-width:760px}.onboarding-progress span{font-size:12px;font-weight:800;white-space:nowrap;color:#bdd3c8}.onboarding-progress span.active{color:#fff}.onboarding-progress i{height:2px;background:rgba(255,255,255,.24);flex:1}
+.onboarding-grid{max-width:1280px;margin:0 auto;display:grid;grid-template-columns:1.15fr .85fr;gap:20px;align-items:start}
+.section-rule{height:1px;background:var(--line);margin:5px 0}
+.agreement-box{max-height:320px;overflow:auto;white-space:pre-wrap;background:#f7f9f8;border:1px solid var(--line);border-radius:12px;padding:18px;font-size:13px;line-height:1.65;color:#26332d}
+.agreement-box.not-ready{border-color:#e6bc80;background:#fff9ee}
+.video-onboarding-panel{position:sticky;top:20px}
+.video-lock{min-height:260px;border:1px dashed #b9c9c0;border-radius:14px;background:#f6f9f7;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--muted);gap:6px;margin:10px 0}
+.video-lock b{color:var(--ink)}
+.video-onboarding-panel.unlocked .video-lock{display:none}
+.video-onboarding-panel:not(.unlocked) .video-box{display:none}
+@media(max-width:900px){.onboarding-shell{padding:16px 12px 36px}.onboarding-grid{grid-template-columns:1fr}.video-onboarding-panel{position:static}.onboarding-hero{padding:25px 22px}.onboarding-hero h1{font-size:27px}.onboarding-progress{overflow:auto}.onboarding-header{align-items:flex-start}}
+
+
+/* V5 live agent KYC */
+.live-video-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}
+.video-label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:850;color:var(--muted);margin:0 0 6px 2px}
+.remote-video{background:linear-gradient(135deg,#111,#1e2924)}
+.waiting-card{display:flex;gap:12px;align-items:center;border:1px solid var(--line);border-radius:12px;background:#f7f9f8;padding:14px;margin:12px 0}
+.waiting-card b,.waiting-card span{display:block}.waiting-card span{font-size:12px;color:var(--muted);margin-top:3px}
+.waiting-dot{width:12px;height:12px;border-radius:50%;background:#89968f;flex:0 0 auto}
+.waiting-card.waiting .waiting-dot{background:#d59000;box-shadow:0 0 0 6px rgba(213,144,0,.12);animation:kycPulse 1.4s infinite}
+.waiting-card.live .waiting-dot{background:#008a55;box-shadow:0 0 0 6px rgba(0,138,85,.12)}
+.waiting-card.failed .waiting-dot{background:#b42318}
+@keyframes kycPulse{50%{transform:scale(.72);opacity:.5}}
+.live-kyc-layout{grid-template-columns:minmax(300px,.8fr) minmax(0,2.2fr)}
+.live-queue{display:flex;flex-direction:column;gap:10px;max-height:70vh;overflow:auto}
+.live-queue-item{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
+.live-queue-item.waiting{border-left:4px solid #d59000}
+.live-queue-item.mine{border-left:4px solid var(--green)}
+.live-queue-item h3{margin:0 0 5px;font-size:15px}
+.live-queue-meta{font-size:12px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap;margin:7px 0 12px}
+.agent-grid .video-box{min-height:300px}
+.verification-actions{margin:14px 0}
+@media(max-width:980px){.live-video-grid,.live-kyc-layout{grid-template-columns:1fr}.agent-grid .video-box{min-height:220px}}

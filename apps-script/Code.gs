@@ -1,6 +1,6 @@
 
 /**
- * SARKSH Customer + Admin Portal V2
+ * SARKSH Customer + Admin Portal V5
  * SINGLE-FILE GOOGLE APPS SCRIPT BACKEND
  *
  * Architecture:
@@ -11,13 +11,13 @@
  */
 
 const SARKSH = {
-  VERSION: '3.0.0',
+  VERSION: '5.0.0',
   TIMEZONE: 'Asia/Kolkata',
   SESSION_HOURS: 12,
   PASSWORD_ITERATIONS: 1200,
   CUSTOMER_PREFIX: 'SAR',
   ADMIN_PREFIX: 'ADM',
-  VIDEO_MAX_BYTES: 8 * 1024 * 1024,
+  VIDEO_MAX_BYTES: 3 * 1024 * 1024,
   PROP_SHEET_ID: 'SARKSH_SHEET_ID',
   PROP_KYC_FOLDER_ID: 'SARKSH_KYC_FOLDER_ID',
   PRIMARY_ADMIN_EMAIL: 'grow@sarksh.in',
@@ -41,7 +41,11 @@ const TABS = {
   SYSTEM:'13_SYSTEM_LOGS',
   BACKUPS:'14_BACKUPS',
   SETTINGS:'15_SETTINGS',
-  AUTH:'16_AUTH_CHALLENGES'
+  AUTH:'16_AUTH_CHALLENGES',
+  CONSENTS:'17_CONSENTS',
+  REGISTRATIONS:'18_REGISTRATIONS',
+  KYC_LIVE:'19_KYC_LIVE_SESSIONS',
+  KYC_SIGNAL:'20_KYC_SIGNAL'
 };
 
 const HEADERS = {
@@ -60,42 +64,95 @@ const HEADERS = {
   '13_SYSTEM_LOGS':['log_id','timestamp','level','event','detail'],
   '14_BACKUPS':['backup_id','timestamp','status','reference','detail'],
   '15_SETTINGS':['key','value','updated_at'],
-  '16_AUTH_CHALLENGES':['challenge_id','admin_id','stage','otp_hash','expires_at','attempts','created_at','used']
+  '16_AUTH_CHALLENGES':['challenge_id','admin_id','stage','otp_hash','expires_at','attempts','created_at','used'],
+  '17_CONSENTS':['consent_id','customer_id','agreement_title','agreement_version','agreement_hash','accepted_name','accepted_at','request_id','user_agent','status'],
+  '18_REGISTRATIONS':['registration_id','token_hash','user_id','customer_id','expires_at','used','created_at','status','live_kyc_session_id'],
+  '19_KYC_LIVE_SESSIONS':['session_id','customer_id','user_id','registration_id','status','assigned_agent_id','created_at','accepted_at','started_at','ended_at','result','remarks'],
+  '20_KYC_SIGNAL':['signal_id','session_id','sender','seq','type','payload_json','created_at']
 };
 
 /* =========================================================
    ONE-TIME SETUP
    ========================================================= */
 function setupSarkshPortal() {
-  const props = PropertiesService.getScriptProperties();
-
+  const props=PropertiesService.getScriptProperties();
   let spreadsheet;
-  let sheetId = props.getProperty(SARKSH.PROP_SHEET_ID);
-  if (sheetId) {
-    spreadsheet = SpreadsheetApp.openById(sheetId);
+  const sheetId=props.getProperty(SARKSH.PROP_SHEET_ID);
+
+  if(sheetId){
+    // IMPORTANT: Existing V3/V4 database is reused in-place.
+    spreadsheet=SpreadsheetApp.openById(sheetId);
   } else {
-    spreadsheet = SpreadsheetApp.create('SARKSH Portal Database');
-    props.setProperty(SARKSH.PROP_SHEET_ID, spreadsheet.getId());
+    spreadsheet=SpreadsheetApp.create('SARKSH Portal Database');
+    props.setProperty(SARKSH.PROP_SHEET_ID,spreadsheet.getId());
   }
 
-  Object.keys(HEADERS).forEach(name => ensureSheetSchema_(spreadsheet,name,HEADERS[name]));
+  Object.keys(HEADERS).forEach(name=>ensureSheetSchema_(spreadsheet,name,HEADERS[name]));
 
-  let folderId = props.getProperty(SARKSH.PROP_KYC_FOLDER_ID);
-  if (!folderId) {
-    const folder = DriveApp.createFolder('SARKSH_PRIVATE_KYC');
-    props.setProperty(SARKSH.PROP_KYC_FOLDER_ID, folder.getId());
-    folderId = folder.getId();
+  let folderId=props.getProperty(SARKSH.PROP_KYC_FOLDER_ID);
+  if(!folderId){
+    const folder=DriveApp.createFolder('SARKSH_PRIVATE_KYC');
+    props.setProperty(SARKSH.PROP_KYC_FOLDER_ID,folder.getId());
+    folderId=folder.getId();
   }
 
   seedRoles_();
-  putSetting_('backend_version', SARKSH.VERSION);
-  putSetting_('setup_timestamp', now_());
+  ensureRole_('KYC_AGENT','Live KYC verification agent');
+  putSetting_('backend_version',SARKSH.VERSION);
+  ensureSetting_('registration_agreement_title','Loan Agreement');
+  ensureSetting_('registration_agreement_version','DRAFT-NOT-CONFIGURED');
+  ensureSetting_('registration_agreement_text','Agreement document has not yet been configured by the Super Admin.');
+  ensureSetting_('registration_agreement_ready','FALSE');
 
-  Logger.log('SARKSH backend ready.');
-  Logger.log('Database URL: ' + spreadsheet.getUrl());
-  Logger.log('KYC Folder ID: ' + folderId);
-  Logger.log('Next: run setupPrimaryAdminSecurity(), copy the generated password, then deploy as Web App.');
+  Logger.log('SARKSH V5 backend ready.');
+  Logger.log('Existing database preserved: '+spreadsheet.getUrl());
+  Logger.log('KYC folder: '+folderId);
 }
+
+/**
+ * Recommended for this V3 -> V5 upgrade.
+ * Makes a Drive copy of the existing database, then performs an additive schema migration.
+ * Existing customer rows, trades, ledger entries, sessions and KYC records are never cleared.
+ */
+function migrateV3DatabaseToV5() {
+  const props=PropertiesService.getScriptProperties();
+  const sheetId=props.getProperty(SARKSH.PROP_SHEET_ID);
+  if(!sheetId) throw new Error('Existing SARKSH database property not found. Do not continue until the V3 Apps Script project is being used.');
+
+  const ss=SpreadsheetApp.openById(sheetId);
+  const backupName='SARKSH Portal DB PRE-V5 '+Utilities.formatDate(new Date(),SARKSH.TIMEZONE,'yyyy-MM-dd_HH-mm-ss');
+  const backup=DriveApp.getFileById(sheetId).makeCopy(backupName);
+
+  appendMigrationBackupLog_(backup);
+  Object.keys(HEADERS).forEach(name=>ensureSheetSchema_(ss,name,HEADERS[name]));
+  seedRoles_();
+  ensureRole_('KYC_AGENT','Live KYC verification agent');
+  putSetting_('backend_version',SARKSH.VERSION);
+  ensureSetting_('registration_agreement_title','Loan Agreement');
+  ensureSetting_('registration_agreement_version','DRAFT-NOT-CONFIGURED');
+  ensureSetting_('registration_agreement_text','Agreement document has not yet been configured by the Super Admin.');
+  ensureSetting_('registration_agreement_ready','FALSE');
+
+  Logger.log('V3/V4 DATABASE PRESERVED.');
+  Logger.log('Live database: '+ss.getUrl());
+  Logger.log('Pre-V5 backup: '+backup.getUrl());
+  Logger.log('Only missing tabs/columns were added.');
+  return {database_url:ss.getUrl(),backup_url:backup.getUrl()};
+}
+
+function appendMigrationBackupLog_(file) {
+  try{
+    const sh=sheet_(TABS.BACKUPS);
+    const h=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
+    const row={
+      backup_id:makeId_('BAK'),timestamp:now_(),status:'SUCCESS',
+      reference:file.getId(),detail:'Automatic pre-V5 migration backup'
+    };
+    sh.appendRow(h.map(k=>row[k]===undefined?'':row[k]));
+  }catch(_){}
+}
+
+
 
 /* Run after setupSarkshPortal(). Generates/rotates the primary admin password.
    Copy the generated password from Execution log and store it securely. */
@@ -159,7 +216,12 @@ function doPost(e) {
     if (!action) throw new Error('Missing action.');
 
     const routes = {
+      getRegistrationAgreement: getRegistrationAgreement_,
       registerCustomer: registerCustomer_,
+      createLiveKycSession: createLiveKycSession_,
+      liveKycStatus: liveKycStatus_,
+      liveKycSignalSend: liveKycSignalSend_,
+      liveKycSignalPoll: liveKycSignalPoll_,
       loginCustomer: loginCustomer_,
       logout: p => logout_(p.token),
       customerDashboard: customerDashboard_,
@@ -185,7 +247,13 @@ function doPost(e) {
       adminAudit: adminAudit_,
       adminListAdmins: adminListAdmins_,
       adminCreateAdmin: adminCreateAdmin_,
-      adminSetAdminStatus: adminSetAdminStatus_
+      adminSetAdminStatus: adminSetAdminStatus_,
+      adminAgreementGet: adminAgreementGet_,
+      adminAgreementSave: adminAgreementSave_,
+      agentLiveKycQueue: agentLiveKycQueue_,
+      agentAcceptLiveKyc: agentAcceptLiveKyc_,
+      agentMarkLiveKycConnected: agentMarkLiveKycConnected_,
+      agentCompleteLiveKyc: agentCompleteLiveKyc_
     };
 
     if (!routes[action]) throw new Error('Unknown action: ' + action);
@@ -277,6 +345,21 @@ function updateRow_(name, rowNo, patch) {
   });
 }
 
+function updateRowUnlocked_(name,rowNo,patch) {
+  const sh=sheet_(name);
+  const headers=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
+  const current=sh.getRange(rowNo,1,1,headers.length).getValues()[0];
+  headers.forEach((k,i)=>{if(Object.prototype.hasOwnProperty.call(patch,k))current[i]=patch[k];});
+  sh.getRange(rowNo,1,1,headers.length).setValues([current]);
+}
+
+function appendRowUnlocked_(name,obj) {
+  const sh=sheet_(name);
+  const headers=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
+  sh.appendRow(headers.map(k=>obj[k]===undefined?'':obj[k]));
+}
+
+
 function withWriteLock_(fn) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -288,6 +371,23 @@ function putSetting_(key,value) {
   const existing = rows.find(x => String(x.key) === String(key));
   if (existing) updateRow_(TABS.SETTINGS, existing.__row, {value,updated_at:now_()});
   else appendRow_(TABS.SETTINGS,{key,value,updated_at:now_()});
+}
+
+function ensureSetting_(key,value) {
+  const exists=getRows_(TABS.SETTINGS).some(x=>String(x.key)===String(key));
+  if(!exists) appendRow_(TABS.SETTINGS,{key,value,updated_at:now_()});
+}
+function getSetting_(key,fallback) {
+  const row=getRows_(TABS.SETTINGS).find(x=>String(x.key)===String(key));
+  return row ? row.value : fallback;
+}
+function currentAgreement_() {
+  const title=String(getSetting_('registration_agreement_title','Loan Agreement'));
+  const version=String(getSetting_('registration_agreement_version',''));
+  const text=String(getSetting_('registration_agreement_text',''));
+  const ready=String(getSetting_('registration_agreement_ready','FALSE')).toUpperCase()==='TRUE';
+  const hash=hexDigest_(title+'|'+version+'|'+text);
+  return {title,version,text,ready,hash};
 }
 
 /* =========================================================
@@ -439,37 +539,122 @@ function systemLog_(level,event,detail) {
 /* =========================================================
    CUSTOMER AUTH / REGISTRATION
    ========================================================= */
+function getRegistrationAgreement_() {
+  return {ok:true,agreement:currentAgreement_()};
+}
+
 function registerCustomer_(p) {
   const email=normalizeEmail_(p.email), name=String(p.full_name||'').trim();
   const mobile=String(p.mobile||'').trim(), password=String(p.password||'');
-  if(!name) throw new Error('Full name is required.');
+  const pan=String(p.pan||'').trim().toUpperCase();
+  const dob=String(p.dob||'').trim(), address=String(p.address||'').trim();
+  const identityRef=String(p.identity_ref||'').trim();
+  const acceptedName=String(p.accepted_name||'').trim();
+  const agreement=currentAgreement_();
+
+  if(!agreement.ready) throw new Error('Registration agreement is not active.');
+  if(String(p.agreement_hash||'')!==agreement.hash || String(p.agreement_version||'')!==agreement.version)
+    throw new Error('Agreement version changed. Reload registration and review the current document.');
+  if(p.agreement_consent!==true) throw new Error('Agreement acceptance is required.');
+  if(acceptedName.toLowerCase()!==name.toLowerCase()) throw new Error('Agreement name must match the full legal name.');
+  if(!name) throw new Error('Full legal name is required.');
   if(!/^\S+@\S+\.\S+$/.test(email)) throw new Error('Valid email is required.');
   if(!/^\d{10,15}$/.test(mobile)) throw new Error('Valid mobile number is required.');
   if(password.length<8) throw new Error('Password must be at least 8 characters.');
+  if(!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) throw new Error('PAN format is invalid.');
+  if(!dob || !address || !identityRef) throw new Error('Complete all KYC fields.');
   if(getRows_(TABS.USERS).some(x=>normalizeEmail_(x.email)===email)) throw new Error('Email is already registered.');
 
   const customerId=makeId_(SARKSH.CUSTOMER_PREFIX), userId=makeId_('USR'), salt=newSalt_();
+  const rawToken=Utilities.base64EncodeWebSafe(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,Utilities.getUuid()+':'+Date.now()+':'+email)
+  ).replace(/=+$/,'');
+  const regId=makeId_('REG'), created=now_();
+
   withWriteLock_(()=>{
-    const users=sheet_(TABS.USERS), uh=users.getRange(1,1,1,users.getLastColumn()).getValues()[0].map(String);
-    users.appendRow(uh.map(k=>({
+    appendRowUnlocked_(TABS.USERS,{
       user_id:userId,customer_id:customerId,email,password_hash:hashPassword_(password,salt),
-      password_salt:salt,role:'CUSTOMER',status:'ACTIVE',created_at:now_(),last_login:''
-    })[k] ?? ''));
-
-    const customers=sheet_(TABS.CUSTOMERS), ch=customers.getRange(1,1,1,customers.getLastColumn()).getValues()[0].map(String);
-    customers.appendRow(ch.map(k=>({
-      customer_id:customerId,full_name:name,mobile,email,dob:'',pan_ref:'',address:'',
-      kyc_status:'NOT_SUBMITTED',account_status:'PENDING_KYC',created_at:now_(),updated_at:now_()
-    })[k] ?? ''));
-
-    const accounts=sheet_(TABS.ACCOUNTS), ah=accounts.getRange(1,1,1,accounts.getLastColumn()).getValues()[0].map(String);
-    accounts.appendRow(ah.map(k=>({
+      password_salt:salt,role:'CUSTOMER',status:'PENDING_LIVE_KYC',created_at:created,last_login:''
+    });
+    appendRowUnlocked_(TABS.CUSTOMERS,{
+      customer_id:customerId,full_name:name,mobile,email,dob,pan_ref:'PAN-****'+pan.slice(-4),address,
+      kyc_status:'WAITING_LIVE_KYC',account_status:'REGISTRATION_INCOMPLETE',created_at:created,updated_at:created
+    });
+    appendRowUnlocked_(TABS.KYC,{
+      kyc_id:makeId_('KYC'),customer_id:customerId,pan,dob,address,identity_ref:identityRef,
+      status:'WAITING_LIVE_KYC',submitted_at:created,reviewed_at:'',reviewed_by:'',remarks:'',
+      video_file_id:'',video_view_url:''
+    });
+    appendRowUnlocked_(TABS.ACCOUNTS,{
       account_id:makeId_('ACC'),customer_id:customerId,status:'PENDING',opening_balance:0,
-      created_at:now_(),updated_at:now_()
-    })[k] ?? ''));
+      created_at:created,updated_at:created
+    });
+    appendRowUnlocked_(TABS.CONSENTS,{
+      consent_id:makeId_('CON'),customer_id:customerId,agreement_title:agreement.title,
+      agreement_version:agreement.version,agreement_hash:agreement.hash,accepted_name:acceptedName,
+      accepted_at:created,request_id:String(p.request_id||''),user_agent:String(p.user_agent||''),status:'ACCEPTED'
+    });
+    appendRowUnlocked_(TABS.REGISTRATIONS,{
+      registration_id:regId,token_hash:hexDigest_(rawToken),user_id:userId,customer_id:customerId,
+      expires_at:new Date(Date.now()+24*60*60*1000).toISOString(),used:'FALSE',created_at:created,
+      status:'WAITING_LIVE_KYC',live_kyc_session_id:''
+    });
   });
-  audit_(userId,'CUSTOMER','REGISTER','CUSTOMER',customerId,'SUCCESS','');
-  return {ok:true,customer_id:customerId};
+
+  audit_(userId,'CUSTOMER','REGISTER_KYC_AGREEMENT','CUSTOMER',customerId,'SUCCESS',
+    JSON.stringify({agreement_version:agreement.version,agreement_hash:agreement.hash}));
+  return {ok:true,customer_id:customerId,registration_token:rawToken};
+}
+
+
+function decodeBase64Safe_(value) {
+  let s=String(value||'').replace(/^data:[^;]+;base64,/i,'').replace(/\s/g,'');
+  if(!s) throw new Error('Empty encoded payload.');
+  const mod=s.length%4;
+  if(mod===1) throw new Error('Verification video payload is incomplete. Record again.');
+  if(mod) s += '='.repeat(4-mod);
+  try { return Utilities.base64Decode(s); }
+  catch(_) {
+    try { return Utilities.base64DecodeWebSafe(s); }
+    catch(__) { throw new Error('Verification video could not be decoded. Record again using the portal camera.'); }
+  }
+}
+
+function uploadRegistrationVideo_(p) {
+  const hash=hexDigest_(String(p.registration_token||''));
+  const reg=getRows_(TABS.REGISTRATIONS).find(x=>x.token_hash===hash && String(x.used)!=='TRUE');
+  if(!reg || new Date(reg.expires_at)<=new Date()) throw new Error('Registration video session expired. Please restart registration.');
+
+  const user=getRows_(TABS.USERS).find(x=>x.user_id===reg.user_id);
+  const customer=getRows_(TABS.CUSTOMERS).find(x=>x.customer_id===reg.customer_id);
+  const kyc=getRows_(TABS.KYC).find(x=>x.customer_id===reg.customer_id);
+  if(!user || !customer || !kyc) throw new Error('Registration record is incomplete.');
+
+  const folderId=PropertiesService.getScriptProperties().getProperty(SARKSH.PROP_KYC_FOLDER_ID);
+  if(!folderId) throw new Error('KYC storage is not configured.');
+  const bytes=decodeBase64Safe_(p.file_base64);
+  if(!bytes.length) throw new Error('Empty verification video.');
+  if(bytes.length>SARKSH.VIDEO_MAX_BYTES) throw new Error('Verification video exceeds the 3 MB onboarding limit.');
+  const mime=String(p.mime_type||'video/webm');
+  if(!/^video\//.test(mime)) throw new Error('Invalid verification video format.');
+
+  const file=DriveApp.getFolderById(folderId).createFile(
+    Utilities.newBlob(bytes,mime,customer.customer_id+'_'+Date.now()+'.webm')
+  );
+
+  withWriteLock_(()=>{
+    updateRowUnlocked_(TABS.KYC,kyc.__row,{
+      video_file_id:file.getId(),video_view_url:file.getUrl(),status:'PENDING',submitted_at:now_()
+    });
+    updateRowUnlocked_(TABS.CUSTOMERS,customer.__row,{
+      kyc_status:'PENDING',account_status:'PENDING_KYC',updated_at:now_()
+    });
+    updateRowUnlocked_(TABS.USERS,user.__row,{status:'ACTIVE'});
+    updateRowUnlocked_(TABS.REGISTRATIONS,reg.__row,{used:'TRUE'});
+  });
+
+  audit_(user.user_id,'CUSTOMER','REGISTRATION_VIDEO_UPLOAD','CUSTOMER',customer.customer_id,'SUCCESS',file.getId());
+  return {ok:true,customer_id:customer.customer_id};
 }
 
 function loginCustomer_(p) {
@@ -686,7 +871,205 @@ function adminCustomerDashboard_(p) {
   const trades=getRows_(TABS.TRADES).filter(x=>x.customer_id===c.customer_id).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)));
   const ledger=getRows_(TABS.LEDGER).filter(x=>x.customer_id===c.customer_id).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const kyc=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id)||null;
-  return {ok:true,customer:c,metrics:metricsForCustomer_(c.customer_id),trades,ledger,kyc};
+  const consent=getRows_(TABS.CONSENTS).filter(x=>x.customer_id===c.customer_id).slice(-1)[0]||null;
+  return {ok:true,customer:c,metrics:metricsForCustomer_(c.customer_id),trades,ledger,kyc,consent};
+}
+
+
+/* =========================================================
+   LIVE KYC / WEBRTC SIGNALLING
+   ========================================================= */
+function registrationByToken_(token) {
+  const hash=hexDigest_(String(token||''));
+  const reg=getRows_(TABS.REGISTRATIONS).find(x=>x.token_hash===hash && String(x.used)!=='TRUE');
+  if(!reg || new Date(reg.expires_at)<=new Date()) throw new Error('Registration verification session expired.');
+  return reg;
+}
+function liveSessionForCustomer_(sessionId,reg) {
+  const s=getRows_(TABS.KYC_LIVE).find(x=>x.session_id===String(sessionId||'') && x.customer_id===reg.customer_id);
+  if(!s) throw new Error('Live KYC session not found.');
+  return s;
+}
+function createLiveKycSession_(p) {
+  const reg=registrationByToken_(p.registration_token);
+  const existing=getRows_(TABS.KYC_LIVE)
+    .filter(x=>x.customer_id===reg.customer_id)
+    .sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0];
+
+  if(existing && ['WAITING_AGENT','AGENT_JOINING','LIVE'].includes(String(existing.status))) {
+    return {ok:true,session_id:existing.session_id,status:existing.status};
+  }
+  if(existing && String(existing.status)==='COMPLETED' && String(existing.result)!=='RESUBMIT') {
+    throw new Error('Live KYC has already been completed.');
+  }
+
+  const sessionId=makeId_('LKY');
+  appendRow_(TABS.KYC_LIVE,{
+    session_id:sessionId,customer_id:reg.customer_id,user_id:reg.user_id,registration_id:reg.registration_id,
+    status:'WAITING_AGENT',assigned_agent_id:'',created_at:now_(),accepted_at:'',started_at:'',ended_at:'',
+    result:'',remarks:''
+  });
+  updateRow_(TABS.REGISTRATIONS,reg.__row,{status:'WAITING_AGENT',live_kyc_session_id:sessionId});
+  const c=getRows_(TABS.CUSTOMERS).find(x=>x.customer_id===reg.customer_id);
+  if(c) updateRow_(TABS.CUSTOMERS,c.__row,{kyc_status:'WAITING_AGENT',updated_at:now_()});
+  const k=getRows_(TABS.KYC).find(x=>x.customer_id===reg.customer_id);
+  if(k) updateRow_(TABS.KYC,k.__row,{status:'WAITING_AGENT',submitted_at:now_()});
+  audit_(reg.user_id,'CUSTOMER','LIVE_KYC_QUEUE_JOIN','CUSTOMER',reg.customer_id,'SUCCESS',sessionId);
+  return {ok:true,session_id:sessionId,status:'WAITING_AGENT'};
+}
+function liveKycStatus_(p) {
+  const reg=registrationByToken_(p.registration_token);
+  const s=liveSessionForCustomer_(p.session_id,reg);
+  const waiting=getRows_(TABS.KYC_LIVE)
+    .filter(x=>String(x.status)==='WAITING_AGENT')
+    .sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)));
+  const pos=Math.max(1,waiting.findIndex(x=>x.session_id===s.session_id)+1);
+  return {ok:true,session:{
+    session_id:s.session_id,status:s.status,result:s.result||'',remarks:s.remarks||''
+  },queue_position:String(s.status)==='WAITING_AGENT'?pos:0};
+}
+function authorizeLiveParticipant_(p) {
+  const participant=String(p.participant||'').toUpperCase();
+  if(participant==='CUSTOMER'){
+    const reg=registrationByToken_(p.registration_token);
+    const session=liveSessionForCustomer_(p.session_id,reg);
+    return {participant,session,actor_id:reg.user_id,role:'CUSTOMER'};
+  }
+  if(participant==='AGENT'){
+    const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
+    const session=getRows_(TABS.KYC_LIVE).find(x=>x.session_id===String(p.session_id||''));
+    if(!session) throw new Error('Live KYC session not found.');
+    if(session.assigned_agent_id && session.assigned_agent_id!==admin.admin_id && admin.role!=='SUPER_ADMIN')
+      throw new Error('This live KYC session is assigned to another agent.');
+    return {participant,session,actor_id:admin.admin_id,role:admin.role};
+  }
+  throw new Error('Invalid live KYC participant.');
+}
+function liveKycSignalSend_(p) {
+  const auth=authorizeLiveParticipant_(p);
+  const type=String(p.type||'').toUpperCase();
+  if(!['OFFER','ANSWER','ICE'].includes(type)) throw new Error('Invalid WebRTC signal type.');
+  const payload=String(p.payload_json||'');
+  if(!payload || payload.length>30000) throw new Error('Invalid WebRTC signal payload.');
+  const seq=Date.now()*1000+Math.floor(Math.random()*1000);
+  appendRow_(TABS.KYC_SIGNAL,{
+    signal_id:makeId_('SIG'),session_id:auth.session.session_id,sender:auth.participant,
+    seq,type,payload_json:payload,created_at:now_()
+  });
+  return {ok:true,seq};
+}
+function liveKycSignalPoll_(p) {
+  const auth=authorizeLiveParticipant_(p);
+  const after=Number(p.after_seq||0);
+  const other=auth.participant==='CUSTOMER'?'AGENT':'CUSTOMER';
+  const signals=getRows_(TABS.KYC_SIGNAL)
+    .filter(x=>x.session_id===auth.session.session_id && String(x.sender)===other && Number(x.seq)>after)
+    .sort((a,b)=>Number(a.seq)-Number(b.seq))
+    .map(x=>({seq:Number(x.seq),type:x.type,payload_json:x.payload_json}));
+  return {ok:true,signals};
+}
+function agentLiveKycQueue_(p) {
+  const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
+  const customers=getRows_(TABS.CUSTOMERS), kycs=getRows_(TABS.KYC);
+  const nowMs=Date.now();
+  const sessions=getRows_(TABS.KYC_LIVE)
+    .filter(x=>['WAITING_AGENT','AGENT_JOINING','LIVE'].includes(String(x.status)))
+    .filter(x=>!x.assigned_agent_id || x.assigned_agent_id===admin.admin_id || admin.role==='SUPER_ADMIN')
+    .sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)))
+    .map(s=>{
+      const c=customers.find(x=>x.customer_id===s.customer_id)||{};
+      const k=kycs.find(x=>x.customer_id===s.customer_id)||{};
+      const pan=String(k.pan||'');
+      return {
+        session_id:s.session_id,customer_id:s.customer_id,full_name:c.full_name||'',email:c.email||'',
+        status:s.status,pan_masked:pan?('*****'+pan.slice(-4)):'',wait_minutes:Math.max(0,Math.floor((nowMs-new Date(s.created_at).getTime())/60000))
+      };
+    });
+  return {ok:true,sessions};
+}
+function agentAcceptLiveKyc_(p) {
+  const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
+  const s=getRows_(TABS.KYC_LIVE).find(x=>x.session_id===String(p.session_id||''));
+  if(!s) throw new Error('Live KYC session not found.');
+  if(s.assigned_agent_id && s.assigned_agent_id!==admin.admin_id && admin.role!=='SUPER_ADMIN')
+    throw new Error('Another agent already accepted this customer.');
+
+  if(String(s.status)==='WAITING_AGENT'){
+    updateRow_(TABS.KYC_LIVE,s.__row,{assigned_agent_id:admin.admin_id,status:'AGENT_JOINING',accepted_at:now_()});
+  } else if(!['AGENT_JOINING','LIVE'].includes(String(s.status))) {
+    throw new Error('This live KYC session is no longer available.');
+  }
+
+  const c=getRows_(TABS.CUSTOMERS).find(x=>x.customer_id===s.customer_id)||{};
+  const k=getRows_(TABS.KYC).find(x=>x.customer_id===s.customer_id)||{};
+  const consent=getRows_(TABS.CONSENTS).filter(x=>x.customer_id===s.customer_id).slice(-1)[0]||{};
+  const pan=String(k.pan||'');
+  audit_(admin.admin_id,admin.role,'LIVE_KYC_ACCEPT','CUSTOMER',s.customer_id,'SUCCESS',s.session_id);
+  return {ok:true,customer:{
+    customer_id:s.customer_id,full_name:c.full_name||'',email:c.email||'',mobile:c.mobile||'',
+    pan_masked:pan?('*****'+pan.slice(-4)):'',dob:k.dob||'',address:k.address||'',
+    agreement_version:consent.agreement_version||''
+  }};
+}
+function agentMarkLiveKycConnected_(p) {
+  const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
+  const s=getRows_(TABS.KYC_LIVE).find(x=>x.session_id===String(p.session_id||''));
+  if(!s) throw new Error('Live KYC session not found.');
+  if(s.assigned_agent_id && s.assigned_agent_id!==admin.admin_id && admin.role!=='SUPER_ADMIN')
+    throw new Error('Session is assigned to another agent.');
+  updateRow_(TABS.KYC_LIVE,s.__row,{status:'LIVE',assigned_agent_id:admin.admin_id,started_at:s.started_at||now_()});
+  return {ok:true};
+}
+function deleteLiveSignals_(sessionId) {
+  const sh=sheet_(TABS.KYC_SIGNAL);
+  const rows=sh.getDataRange().getValues();
+  if(rows.length<2) return;
+  const headers=rows[0].map(String), idx=headers.indexOf('session_id');
+  if(idx<0) return;
+  for(let r=rows.length-1;r>=1;r--){
+    if(String(rows[r][idx])===String(sessionId)) sh.deleteRow(r+1);
+  }
+}
+function agentCompleteLiveKyc_(p) {
+  const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
+  const result=String(p.result||'').toUpperCase();
+  if(!['VERIFIED','RESUBMIT','REJECTED'].includes(result)) throw new Error('Invalid live KYC result.');
+  const s=getRows_(TABS.KYC_LIVE).find(x=>x.session_id===String(p.session_id||''));
+  if(!s) throw new Error('Live KYC session not found.');
+  if(s.assigned_agent_id && s.assigned_agent_id!==admin.admin_id && admin.role!=='SUPER_ADMIN')
+    throw new Error('Session is assigned to another agent.');
+
+  const remarks=String(p.remarks||'').trim();
+  if(result!=='VERIFIED' && !remarks) throw new Error('Remarks are required for re-verification or rejection.');
+
+  const c=getRows_(TABS.CUSTOMERS).find(x=>x.customer_id===s.customer_id);
+  const u=getRows_(TABS.USERS).find(x=>x.user_id===s.user_id);
+  const k=getRows_(TABS.KYC).find(x=>x.customer_id===s.customer_id);
+  const reg=getRows_(TABS.REGISTRATIONS).find(x=>x.registration_id===s.registration_id);
+
+  withWriteLock_(()=>{
+    updateRowUnlocked_(TABS.KYC_LIVE,s.__row,{
+      status:'COMPLETED',ended_at:now_(),result,remarks,assigned_agent_id:admin.admin_id
+    });
+    if(k) updateRowUnlocked_(TABS.KYC,k.__row,{
+      status:result==='VERIFIED'?'APPROVED':result,reviewed_at:now_(),reviewed_by:admin.admin_id,remarks
+    });
+    if(c) updateRowUnlocked_(TABS.CUSTOMERS,c.__row,{
+      kyc_status:result==='VERIFIED'?'APPROVED':result,
+      account_status:result==='VERIFIED'?'ACTIVE':(result==='RESUBMIT'?'KYC_RESUBMIT':'KYC_REJECTED'),
+      updated_at:now_()
+    });
+    if(u) updateRowUnlocked_(TABS.USERS,u.__row,{
+      status:result==='VERIFIED'?'ACTIVE':'PENDING_LIVE_KYC'
+    });
+    if(reg) updateRowUnlocked_(TABS.REGISTRATIONS,reg.__row,{
+      used:result==='VERIFIED'?'TRUE':'FALSE',status:result,live_kyc_session_id:s.session_id
+    });
+  });
+  deleteLiveSignals_(s.session_id);
+  audit_(admin.admin_id,admin.role,'LIVE_KYC_COMPLETE','CUSTOMER',s.customer_id,'SUCCESS',
+    JSON.stringify({result,remarks,session_id:s.session_id}));
+  return {ok:true,result};
 }
 
 /* =========================================================
@@ -842,7 +1225,7 @@ function adminCreateAdmin_(p) {
   const email=normalizeEmail_(p.email), password=String(p.password||''), role=String(p.role||'');
   if(!/^\S+@\S+\.\S+$/.test(email)) throw new Error('Valid email is required.');
   if(password.length<10) throw new Error('Password must be at least 10 characters.');
-  if(!['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','TRADE_ADMIN','AUDITOR'].includes(role)) throw new Error('Invalid role.');
+  if(!['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT','TRADE_ADMIN','AUDITOR'].includes(role)) throw new Error('Invalid role.');
   if(getRows_(TABS.ADMINS).some(x=>normalizeEmail_(x.email)===email)) throw new Error('Admin email already exists.');
   const salt=newSalt_(), id=makeId_(SARKSH.ADMIN_PREFIX);
   appendRow_(TABS.ADMINS,{
@@ -865,19 +1248,50 @@ function adminSetAdminStatus_(p) {
   return {ok:true};
 }
 
+
+/* =========================================================
+   REGISTRATION AGREEMENT ADMIN
+   ========================================================= */
+function adminAgreementGet_(p) {
+  requireAdmin_(p.token,['SUPER_ADMIN']);
+  return {ok:true,agreement:currentAgreement_()};
+}
+function adminAgreementSave_(p) {
+  const admin=requireAdmin_(p.token,['SUPER_ADMIN']);
+  const title=String(p.title||'').trim(), version=String(p.version||'').trim(), text=String(p.text||'').trim();
+  const ready=p.ready===true;
+  if(!title || !version || !text) throw new Error('Agreement title, version and text are required.');
+  if(text.length<100) throw new Error('Agreement text is too short to publish.');
+  putSetting_('registration_agreement_title',title);
+  putSetting_('registration_agreement_version',version);
+  putSetting_('registration_agreement_text',text);
+  putSetting_('registration_agreement_ready',ready?'TRUE':'FALSE');
+  const a=currentAgreement_();
+  audit_(admin.admin_id,admin.role,'AGREEMENT_PUBLISH','SETTINGS','registration_agreement','SUCCESS',
+    JSON.stringify({title:a.title,version:a.version,hash:a.hash,ready:a.ready}));
+  return {ok:true,hash:a.hash,ready:a.ready};
+}
+
 /* =========================================================
    INITIAL DATA
    ========================================================= */
+
+function ensureRole_(role,description) {
+  if(getRows_(TABS.ROLES).some(x=>String(x.role)===String(role))) return;
+  appendRow_(TABS.ROLES,{role,description});
+}
+
 function seedRoles_() {
-  if(getRows_(TABS.ROLES).length) return;
   [
     ['SUPER_ADMIN','Full system access'],
     ['OPERATIONS_ADMIN','Customers, KYC, ledger, trades and monitoring'],
     ['KYC_ADMIN','KYC review'],
+    ['KYC_AGENT','Live KYC verification agent'],
     ['TRADE_ADMIN','Trade entry'],
     ['AUDITOR','Read-only audit and monitoring']
-  ].forEach(r=>appendRow_(TABS.ROLES,{role:r[0],description:r[1]}));
+  ].forEach(r=>ensureRole_(r[0],r[1]));
 }
+
 
 /* =========================================================
    RESPONSE
