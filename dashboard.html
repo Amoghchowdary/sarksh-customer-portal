@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#005d3b" />
+  <meta name="description" content="SARKSH secure customer and administration portal." />
+  <title>Dashboard | SARKSH</title>
+  <link rel="icon" type="image/png" href="assets/logo/sarksh-logo-web.png" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="side-brand" href="dashboard.html"><img src="assets/logo/sarksh-logo-web.png" alt="SARKSH" /><span>SARKSH</span></a>
+      <nav>
+        <a class="active" href="dashboard.html">Overview</a>
+        <a href="trades.html">Trades</a>
+        <a href="kyc.html">KYC & Verification</a>
+      </nav>
+      <div class="side-bottom">
+        <button class="btn ghost full" data-logout>Sign Out</button>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <button class="menu-btn" data-menu>☰</button>
+        <div><p class="eyebrow">CUSTOMER PORTAL</p><h1 id="welcome">Account Overview</h1></div>
+        <div class="top-statuses"><span id="kycStatus" class="status-pill">KYC Loading</span><span id="accountStatus" class="status-pill">Loading</span></div>
+      </header>
+
+      <section class="kpi-grid">
+        <article class="kpi-card hero"><span>Amount Placed</span><strong id="amountPlaced">—</strong><small>Principal recorded to this account</small></article>
+        <article class="kpi-card"><span>Current Account Amount</span><strong id="currentAmount">—</strong><small>Principal plus recorded net activity</small></article>
+        <article class="kpi-card"><span>Trades Taken</span><strong id="totalTrades">—</strong><small>Trades recorded on this account</small></article>
+        <article class="kpi-card"><span>Net Trading P&L</span><strong id="totalPnl">—</strong><small>Closed trades after charges</small></article>
+      </section>
+
+      <section class="content-grid">
+        <article class="panel span2">
+          <div class="panel-head"><div><p class="eyebrow">PERFORMANCE</p><h2>Account movement</h2></div><span class="muted">Last 30 recorded days</span></div>
+          <canvas id="performanceChart" height="120"></canvas>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><p class="eyebrow">TRADE QUALITY</p><h2>Win / Loss</h2></div></div>
+          <div class="ring-wrap"><div id="winRing" class="ring"><span id="winRate">—</span></div></div>
+          <div class="mini-stats"><span>Winning <b id="winningTrades">—</b></span><span>Losing <b id="losingTrades">—</b></span></div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><div><p class="eyebrow">RECENT ACTIVITY</p><h2>Recent trades</h2></div><a href="trades.html">View all →</a></div>
+        <div class="table-wrap"><table><thead><tr><th>Date</th><th>Symbol</th><th>Type</th><th>Qty</th><th>Net P&L</th><th>Status</th></tr></thead><tbody id="recentTrades"><tr><td colspan="6">Loading…</td></tr></tbody></table></div>
+      </section>
+    </main>
+  </div>
+  
+  <script src="js/app.js?v=3.0.0"></script>
+</body></html>

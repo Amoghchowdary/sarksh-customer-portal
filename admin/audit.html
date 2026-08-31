@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#005d3b" />
+  <meta name="description" content="SARKSH secure customer and administration portal." />
+  <title>Audit Logs | SARKSH Admin</title>
+  <link rel="icon" type="image/png" href="../assets/logo/sarksh-logo-web.png" />
+  <link rel="stylesheet" href="../css/app.css" />
+<meta name="robots" content="noindex,nofollow"/></head>
+<body><div class="app-shell admin-shell">
+<aside class="sidebar"><a class="side-brand" href="dashboard.html"><img src="../assets/logo/sarksh-logo-web.png" alt="SARKSH"/><span>SARKSH</span></a><p class="side-caption">CONTROL CENTRE</p><nav><a href="dashboard.html">Dashboard</a><a href="customers.html">Customers</a><a href="kyc.html">KYC & Verification</a><a href="trades.html">Trade Management</a><a href="accounts.html">Accounts & Ledger</a><a href="monitoring.html">Monitoring</a><a href="reports.html">Reports</a><a href="admins.html">Admins</a><a class="active" href="audit.html">Audit Logs</a></nav><div class="side-bottom"><button class="btn ghost full" data-logout>Sign Out</button></div></aside>
+<main class="main"><header class="topbar"><button class="menu-btn" data-menu>☰</button><div><p class="eyebrow">ADMIN</p><h1>Audit Logs</h1></div></header><section class="panel"><div class="panel-head"><div><h2>Immutable operational record</h2><p class="muted">Normal admin workflows do not expose delete controls.</p></div><input id="auditSearch" placeholder="Search logs…" /></div><div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Actor</th><th>Role</th><th>Action</th><th>Entity</th><th>Result</th></tr></thead><tbody id="auditTableRows"><tr><td colspan="6">Loading…</td></tr></tbody></table></div></section></main></div>
+  <script src="../js/app.js?v=3.0.0"></script>
+</body></html>

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#005d3b"/><meta name="robots" content="noindex,nofollow"/>
+<title>Secure Admin Login | SARKSH</title>
+<link rel="icon" type="image/png" href="../assets/logo/sarksh-logo-web.png"/><link rel="stylesheet" href="../css/app.css"/>
+</head><body class="auth-body">
+<main class="auth-shell">
+  <section class="brand-panel admin-brand">
+    <img src="../assets/logo/sarksh-logo-web.png" class="brand-logo large" alt="SARKSH logo"/>
+    <div><p class="eyebrow">SARKSH CONTROL CENTRE</p><h1>Three gates. One command centre.</h1>
+    <p class="muted light">Admin-generated password, email OTP verification and Google Authenticator TOTP before a control-centre session is issued.</p></div>
+  </section>
+  <section class="auth-card admin-auth-card">
+    <a class="text-link" href="../index.html">← Back</a>
+    <span class="status-pill warning">Authorised Access Only</span>
+    <h2>Admin authentication</h2>
+    <div class="auth-steps" aria-label="Authentication progress">
+      <span class="auth-step active" data-step-dot="1">1</span><i></i><span class="auth-step" data-step-dot="2">2</span><i></i><span class="auth-step" data-step-dot="3">3</span>
+    </div>
+
+    <section data-auth-step="1">
+      <p class="muted">Step 1 of 3 · Password verification</p>
+      <form id="adminPasswordForm" class="stack">
+        <label>Admin email<input name="email" type="email" value="grow@sarksh.in" required autocomplete="username"/></label>
+        <label>Admin-generated password<input name="password" type="password" required autocomplete="current-password"/></label>
+        <button class="btn primary full" type="submit">Verify Password</button>
+      </form>
+    </section>
+
+    <section data-auth-step="2" hidden>
+      <p class="muted">Step 2 of 3 · Email OTP</p>
+      <div class="security-callout"><b>OTP sent to</b><span id="otpDestination">grow@sarksh.in</span></div>
+      <form id="adminOtpForm" class="stack">
+        <label>6-digit email OTP<input name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required/></label>
+        <button class="btn primary full" type="submit">Verify Email OTP</button>
+      </form>
+      <button id="restartAdminLogin" class="link-button" type="button">Start again</button>
+    </section>
+
+    <section data-auth-step="3" hidden>
+      <p class="muted">Step 3 of 3 · Google Authenticator</p>
+      <div id="totpEnrollment" class="security-callout" hidden>
+        <b>First-time Authenticator setup</b>
+        <p>Open Google Authenticator → Add code → Enter a setup key. Use the account name shown below and the secret key.</p>
+        <label>Account<input id="totpAccount" readonly/></label>
+        <label>Setup key<input id="totpSecret" readonly/></label>
+        <small class="muted">Type: Time based</small>
+      </div>
+      <form id="adminTotpForm" class="stack">
+        <label>Google Authenticator code<input name="totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required/></label>
+        <button class="btn primary full" type="submit">Enter Control Centre</button>
+      </form>
+    </section>
+
+    <div id="message" class="form-message" aria-live="polite"></div>
+    <p class="microcopy">If the Authenticator device is lost, recovery must be performed from the Apps Script project by an authorised owner.</p>
+  </section>
+</main><script src="../js/app.js?v=3.0.0"></script></body></html>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#005d3b" />
+  <meta name="description" content="SARKSH secure customer and administration portal." />
+  <title>Customer Login | SARKSH</title>
+  <link rel="icon" type="image/png" href="assets/logo/sarksh-logo-web.png" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body class="auth-body">
+  <main class="auth-shell">
+    <section class="brand-panel">
+      <img src="assets/logo/sarksh-logo-web.png" class="brand-logo large" alt="SARKSH logo" />
+      <div>
+        <p class="eyebrow">CUSTOMER PORTAL</p>
+        <h1>Built for clarity.</h1>
+        <p class="muted light">Your account, trades, verification status and performance in one secure view.</p>
+      </div>
+    </section>
+    <section class="auth-card">
+      <a class="text-link" href="index.html">← Back</a>
+      <h2>Sign in</h2>
+      <p class="muted">Use your email or SARKSH customer ID.</p>
+      <form id="loginForm" class="stack">
+        <label>Email / Customer ID<input name="identifier" required autocomplete="username" /></label>
+        <label>Password<input name="password" type="password" required autocomplete="current-password" /></label>
+        <button class="btn primary full" type="submit">Sign In</button>
+      </form>
+      <div id="message" class="form-message" aria-live="polite"></div>
+      <div class="auth-footer">
+        <a href="register.html">Create account</a>
+        <button class="link-button" id="forgotPassword" type="button">Forgot password?</button>
+      </div>
+    </section>
+  </main>
+  
+  
+  
+  
+  <script src="js/app.js?v=3.0.0"></script>
+</body>
+</html>

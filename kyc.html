@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#005d3b" />
+  <meta name="description" content="SARKSH secure customer and administration portal." />
+  <title>KYC & Verification | SARKSH</title>
+  <link rel="icon" type="image/png" href="assets/logo/sarksh-logo-web.png" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="side-brand" href="dashboard.html"><img src="assets/logo/sarksh-logo-web.png" alt="SARKSH" /><span>SARKSH</span></a>
+    <nav><a href="dashboard.html">Overview</a><a href="trades.html">Trades</a><a class="active" href="kyc.html">KYC & Verification</a></nav>
+    <div class="side-bottom"><button class="btn ghost full" data-logout>Sign Out</button></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><button class="menu-btn" data-menu>☰</button><div><p class="eyebrow">CUSTOMER PORTAL</p><h1>KYC & Verification</h1></div><span id="kycStatus" class="status-pill">Loading</span></header>
+    <section class="content-grid">
+      <article class="panel">
+        <p class="eyebrow">IDENTITY DETAILS</p><h2>Customer information</h2>
+        <form id="kycForm" class="stack">
+          <label>PAN<input name="pan" maxlength="10" placeholder="ABCDE1234F" /></label>
+          <label>Date of birth<input name="dob" type="date" /></label>
+          <label>Address<textarea name="address" rows="4"></textarea></label>
+          <label>Identity document reference / last 4 digits<input name="identity_ref" maxlength="32" /></label>
+          <label class="checkbox"><input name="kyc_consent" type="checkbox" required /> <span>I consent to verification and secure processing of the submitted information.</span></label>
+          <button class="btn primary" type="submit">Submit KYC Details</button>
+        </form>
+        <div id="message" class="form-message" aria-live="polite"></div>
+      </article>
+      <article class="panel">
+        <p class="eyebrow">VIDEO VERIFICATION</p><h2>Secure video capture</h2>
+        <p class="muted">Emergency MVP: record a short verification clip. Production deployment should move video storage to private cloud object storage with signed uploads.</p>
+        <video id="preview" class="video-box" autoplay muted playsinline></video>
+        <div class="button-row"><button id="startCamera" class="btn secondary">Start Camera</button><button id="recordVideo" class="btn primary" disabled>Record 15s</button></div>
+        <div id="videoMessage" class="form-message" aria-live="polite"></div>
+      </article>
+    </section>
+  </main>
+</div>
+
+  <script src="js/app.js?v=3.0.0"></script>
+</body></html>
