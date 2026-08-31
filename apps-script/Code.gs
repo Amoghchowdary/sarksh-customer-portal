@@ -11,7 +11,7 @@
  */
 
 const SARKSH = {
-  VERSION: '8.0.0',
+  VERSION: '9.0.0',
   TIMEZONE: 'Asia/Kolkata',
   SESSION_HOURS: 12,
   PASSWORD_ITERATIONS: 1200,
@@ -107,8 +107,10 @@ function setupSarkshPortal() {
   seedRoles_();
   ensureRole_('KYC_AGENT','Live KYC verification agent');
   putSetting_('backend_version',SARKSH.VERSION);
-  ensureSetting_('registration_agreement_title','Loan Agreement');
-  ensureSetting_('registration_agreement_version','DRAFT-NOT-CONFIGURED');
+  ensureSetting_('registration_agreement_company','SARKSH GROW FIN-TECH PRIVATE LIMITED');
+  ensureSetting_('registration_agreement_title','Customer Agreement');
+  ensureSetting_('registration_agreement_version','1.0');
+  ensureSetting_('registration_agreement_effective_date','');
   ensureSetting_('registration_agreement_text','Agreement document has not yet been configured by the Super Admin.');
   ensureSetting_('registration_agreement_ready','FALSE');
   ensureSetting_('live_kyc_accepting','FALSE');
@@ -125,13 +127,13 @@ function setupSarkshPortal() {
  * Makes a Drive copy of the existing database, then performs an additive schema migration.
  * Existing customer rows, trades, ledger entries, sessions and KYC records are never cleared.
  */
-function migrateExistingDatabaseToV8() {
+function migrateExistingDatabaseToV9() {
   const props=PropertiesService.getScriptProperties();
   const sheetId=props.getProperty(SARKSH.PROP_SHEET_ID);
   if(!sheetId) throw new Error('Existing SARKSH database property not found. Do not continue until the V3 Apps Script project is being used.');
 
   const ss=SpreadsheetApp.openById(sheetId);
-  const backupName='SARKSH Portal DB PRE-V8 '+Utilities.formatDate(new Date(),SARKSH.TIMEZONE,'yyyy-MM-dd_HH-mm-ss');
+  const backupName='SARKSH Portal DB PRE-V9 '+Utilities.formatDate(new Date(),SARKSH.TIMEZONE,'yyyy-MM-dd_HH-mm-ss');
   const backup=DriveApp.getFileById(sheetId).makeCopy(backupName);
 
   appendMigrationBackupLog_(backup);
@@ -139,8 +141,10 @@ function migrateExistingDatabaseToV8() {
   seedRoles_();
   ensureRole_('KYC_AGENT','Live KYC verification agent');
   putSetting_('backend_version',SARKSH.VERSION);
-  ensureSetting_('registration_agreement_title','Loan Agreement');
-  ensureSetting_('registration_agreement_version','DRAFT-NOT-CONFIGURED');
+  ensureSetting_('registration_agreement_company','SARKSH GROW FIN-TECH PRIVATE LIMITED');
+  ensureSetting_('registration_agreement_title','Customer Agreement');
+  ensureSetting_('registration_agreement_version','1.0');
+  ensureSetting_('registration_agreement_effective_date','');
   ensureSetting_('registration_agreement_text','Agreement document has not yet been configured by the Super Admin.');
   ensureSetting_('registration_agreement_ready','FALSE');
   ensureSetting_('live_kyc_accepting','FALSE');
@@ -161,7 +165,7 @@ function appendMigrationBackupLog_(file) {
     const h=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
     const row={
       backup_id:makeId_('BAK'),timestamp:now_(),status:'SUCCESS',
-      reference:file.getId(),detail:'Automatic pre-V8 migration backup'
+      reference:file.getId(),detail:'Automatic pre-V9 migration backup'
     };
     sh.appendRow(h.map(k=>row[k]===undefined?'':row[k]));
   }catch(_){}
@@ -253,6 +257,7 @@ function doPost(e) {
       customerChangePassword: customerChangePassword_,
       customerTeam: customerTeam_,
       customerAgreementGet: customerAgreementGet_,
+      customerPortalState: customerPortalState_,
       customerAcceptAgreement: customerAcceptAgreement_,
       getKyc: getKyc_,
       submitKyc: submitKyc_,
@@ -402,13 +407,16 @@ function getSetting_(key,fallback) {
   return row ? row.value : fallback;
 }
 function currentAgreement_() {
-  const title=String(getSetting_('registration_agreement_title','Loan Agreement'));
-  const version=String(getSetting_('registration_agreement_version',''));
+  const company_name=String(getSetting_('registration_agreement_company','SARKSH GROW FIN-TECH PRIVATE LIMITED'));
+  const title=String(getSetting_('registration_agreement_title','Customer Agreement'));
+  const version=String(getSetting_('registration_agreement_version','1.0'));
+  const effective_date=String(getSetting_('registration_agreement_effective_date',''));
   const text=String(getSetting_('registration_agreement_text',''));
-  const ready=String(getSetting_('registration_agreement_ready','FALSE')).toUpperCase()==='TRUE';
-  const hash=hexDigest_(title+'|'+version+'|'+text);
-  return {title,version,text,ready,hash};
+  const ready=String(getSetting_('registration_agreement_ready','FALSE')).toUpperCase()==='TRUE' && text.trim().length>=100;
+  const hash=hexDigest_(company_name+'|'+title+'|'+version+'|'+effective_date+'|'+text);
+  return {company_name,title,version,effective_date,text,ready,hash};
 }
+
 
 /* =========================================================
    SECURITY
@@ -659,6 +667,12 @@ function systemLog_(level,event,detail) {
 
 function currentAgreementCompliance_(customerId){const a=currentAgreement_();if(!a.ready)return {agreement_required:false,agreement_accepted:true,agreement_title:a.title,agreement_version:a.version};const c=getRows_(TABS.CONSENTS).filter(x=>x.customer_id===customerId&&x.status==='ACCEPTED').sort((x,y)=>String(y.accepted_at).localeCompare(String(x.accepted_at))).find(x=>String(x.agreement_hash)===a.hash&&String(x.agreement_version)===a.version);return {agreement_required:true,agreement_accepted:Boolean(c),agreement_title:a.title,agreement_version:a.version,agreement_hash:a.hash,accepted_name:c?c.accepted_name:'',accepted_at:c?c.accepted_at:''};}
 function requireCurrentAgreement_(customerId){const c=currentAgreementCompliance_(customerId);if(c.agreement_required&&!c.agreement_accepted)throw new Error('Current agreement must be accepted before live KYC can proceed.');return c;}
+function customerPortalState_(p){
+  const ctx=customerContext_(p.token),c=ctx.customer,compliance=currentAgreementCompliance_(c.customer_id),desk=kycDeskStatus_();
+  const meet=getRows_(TABS.KYC_LIVE).filter(x=>x.customer_id===c.customer_id&&['WAITING_AGENT','AGENT_JOINING','MEET_PENDING','MEET_READY','LIVE'].includes(String(x.status))).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0]||null;
+  return {ok:true,customer:{customer_id:c.customer_id,account_status:c.account_status,kyc_status:c.kyc_status},compliance,kyc_desk:desk,meet:meet?{status:meet.status,meet_url:resolveStoredMeet_(meet)}:null};
+}
+
 function customerAgreementGet_(p){const ctx=customerContext_(p.token),a=currentAgreement_(),c=currentAgreementCompliance_(ctx.customer.customer_id);return {ok:true,agreement:a,compliance:{accepted:c.agreement_accepted,accepted_name:c.accepted_name||'',accepted_at:c.accepted_at||''}};}
 function customerAcceptAgreement_(p){const ctx=customerContext_(p.token),a=currentAgreement_();if(!a.ready)throw new Error('No active agreement is published.');if(p.consent!==true)throw new Error('Agreement consent is required.');const name=String(p.accepted_name||'').trim();if(name.toLowerCase()!==String(ctx.customer.full_name||'').trim().toLowerCase())throw new Error('Typed legal name must match customer profile.');if(currentAgreementCompliance_(ctx.customer.customer_id).agreement_accepted)return {ok:true,already_accepted:true};appendRow_(TABS.CONSENTS,{consent_id:makeId_('CON'),customer_id:ctx.customer.customer_id,agreement_title:a.title,agreement_version:a.version,agreement_hash:a.hash,accepted_name:name,accepted_at:now_(),request_id:String(p.request_id||''),user_agent:String(p.user_agent||''),status:'ACCEPTED'});audit_(ctx.user.user_id,'CUSTOMER','AGREEMENT_ACCEPT','CUSTOMER',ctx.customer.customer_id,'SUCCESS',JSON.stringify({version:a.version,hash:a.hash}));return {ok:true};}
 function kycDeskStatus_(){return {accepting:String(getSetting_('live_kyc_accepting','FALSE')).toUpperCase()==='TRUE',message:String(getSetting_('live_kyc_message','Live KYC intake is currently unavailable. Please check again later.'))};}
@@ -1516,19 +1530,13 @@ function adminAgreementGet_(p) {
 }
 function adminAgreementSave_(p) {
   const admin=requireAdmin_(p.token,['SUPER_ADMIN']);
-  const title=String(p.title||'').trim(), version=String(p.version||'').trim(), text=String(p.text||'').trim();
-  const ready=p.ready===true;
-  if(!title || !version || !text) throw new Error('Agreement title, version and text are required.');
-  if(text.length<100) throw new Error('Agreement text is too short to publish.');
-  putSetting_('registration_agreement_title',title);
-  putSetting_('registration_agreement_version',version);
-  putSetting_('registration_agreement_text',text);
-  putSetting_('registration_agreement_ready',ready?'TRUE':'FALSE');
-  const a=currentAgreement_();
-  audit_(admin.admin_id,admin.role,'AGREEMENT_PUBLISH','SETTINGS','registration_agreement','SUCCESS',
-    JSON.stringify({title:a.title,version:a.version,hash:a.hash,ready:a.ready}));
-  return {ok:true,hash:a.hash,ready:a.ready};
+  const company_name=String(p.company_name||'').trim()||'SARKSH GROW FIN-TECH PRIVATE LIMITED';
+  const title=String(p.title||'').trim(),version=String(p.version||'').trim(),effective_date=String(p.effective_date||'').trim(),text=String(p.text||'').trim();
+  const ready=p.ready===true;if(!title||!version||!text)throw new Error('Agreement title, version and text are required.');if(text.length<100)throw new Error('Agreement text is too short to publish.');
+  putSetting_('registration_agreement_company',company_name);putSetting_('registration_agreement_title',title);putSetting_('registration_agreement_version',version);putSetting_('registration_agreement_effective_date',effective_date);putSetting_('registration_agreement_text',text);putSetting_('registration_agreement_ready',ready?'TRUE':'FALSE');
+  const a=currentAgreement_();audit_(admin.admin_id,admin.role,'AGREEMENT_PUBLISH','SETTINGS','registration_agreement','SUCCESS',JSON.stringify({company_name:a.company_name,title:a.title,version:a.version,hash:a.hash,ready:a.ready}));return {ok:true,hash:a.hash,ready:a.ready};
 }
+
 
 
 function adminAssignCustomerTeam_(p) {

@@ -11,7 +11,7 @@
     BACKEND_URL: "https://script.google.com/macros/s/AKfycbzvnPVHqRKhJZO8Qd3vtyF0K5_rYYwYTDWXCBZAZZFAZjqgTsBnx1dux6d2KM0PjYGkNA/exec",
     APP_NAME: "SARKSH Portal",
     VIDEO_MAX_MB: 3,
-    BUILD: "8.0.0"
+    BUILD: "9.0.0"
   };
 
 
@@ -36,7 +36,7 @@
 
   async function api(action, payload = {}) {
     if(!CONFIG.BACKEND_URL || CONFIG.BACKEND_URL.includes("PASTE_")) throw new Error("Backend URL is not configured.");
-    const reads=new Set(["customerDashboard","customerTrades","getKycCenter","customerMeetKycStatus","customerSettingsGet","customerTeam","customerAgreementGet","registrationResumeStatus","getRegistrationAgreement","liveKycStatus","adminDashboard","adminCustomers","adminCustomerDashboard","adminKycQueue","adminTrades","adminAccounts","adminMonitoring","adminAudit","adminKycAvailabilityGet","agentLiveKycQueue","adminAgreementGet","adminListAdmins"]);
+    const reads=new Set(["customerDashboard","customerTrades","getKycCenter","customerMeetKycStatus","customerSettingsGet","customerTeam","customerAgreementGet","customerPortalState","registrationResumeStatus","getRegistrationAgreement","liveKycStatus","adminDashboard","adminCustomers","adminCustomerDashboard","adminKycQueue","adminTrades","adminAccounts","adminMonitoring","adminAudit","adminKycAvailabilityGet","agentLiveKycQueue","adminAgreementGet","adminListAdmins"]);
     const attempts=reads.has(action)?2:1;let last=null;
     for(let i=1;i<=attempts;i++){const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);try{const response=await fetch(CONFIG.BACKEND_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action,request_id:crypto.randomUUID?crypto.randomUUID():String(Date.now()),client_build:CONFIG.BUILD,...payload}),redirect:"follow",cache:"no-store",signal:controller.signal});if(!response.ok)throw new Error(`Backend HTTP ${response.status}`);const data=await response.json();if(!data||data.ok!==true)throw new Error(data?.error||"Backend request failed.");return data;}catch(err){last=err.name==="AbortError"?new Error("Backend request timed out."):err;if(i<attempts)await new Promise(r=>setTimeout(r,450));}finally{clearTimeout(timeout);}}
     throw last||new Error("Backend request failed.");
@@ -419,7 +419,33 @@
     }catch(err){if(!sessionFailure(err))box.innerHTML=`<div class="alert danger">${esc(err.message)}</div>`;}
   }
 
-  async function initCustomerAgreement(){const form=$("customerAgreementForm");if(!form)return;const token=requireCustomer();if(!token)return;const load=async()=>{const r=await api("customerAgreementGet",{token}),a=r.agreement||{},c=r.compliance||{};$("customerAgreementTitle").textContent=a.title||"Current Agreement";$("customerAgreementMeta").textContent=`Version ${a.version||"—"} · SHA-256 ${a.hash||"—"}`;$("customerAgreementText").textContent=a.text||"No agreement is currently published.";$("customerAgreementPill").textContent=c.accepted?"ACCEPTED":(a.ready?"ACTION REQUIRED":"NOT ACTIVE");$("customerAgreementPill").className=`status-pill ${c.accepted?"success":(a.ready?"warning":"")}`;$("agreementAcceptedState").innerHTML=c.accepted?`<b>Accepted</b><p>Accepted as ${esc(c.accepted_name||"customer")} on ${esc(fmt(c.accepted_at))}.</p>`:`<b>${a.ready?"Signature required":"No active agreement"}</b><p>${a.ready?"Type your legal name and accept the current agreement.":"The Super Admin has not published an active agreement."}</p>`;form.hidden=c.accepted||!a.ready;};try{await load();}catch(err){if(!sessionFailure(err))setMessage($("customerAgreementMessage"),err.message,"error");}form.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(form);try{await api("customerAcceptAgreement",{token,accepted_name:f.get("accepted_name"),consent:Boolean(f.get("consent")),user_agent:navigator.userAgent});setMessage($("customerAgreementMessage"),"Agreement accepted successfully.","success");await load();}catch(err){setMessage($("customerAgreementMessage"),err.message,"error");}});}
+  async function initCustomerAgreement(){
+    const form=$("customerAgreementForm");if(!form)return;const token=requireCustomer();if(!token)return;
+    const load=async()=>{const r=await api("customerAgreementGet",{token}),a=r.agreement||{},c=r.compliance||{};
+      $("customerAgreementTitle").textContent=a.ready?(a.title||"Customer Agreement"):"Customer Agreement";
+      $("customerAgreementMeta").textContent=a.ready?`${a.company_name||"SARKSH GROW FIN-TECH PRIVATE LIMITED"} · Agreement version ${a.version||"1.0"}${a.effective_date?` · Effective ${fmt(a.effective_date)}`:""}`:`${a.company_name||"SARKSH GROW FIN-TECH PRIVATE LIMITED"} · No agreement awaiting acceptance`;
+      if(a.ready) $("customerAgreementText").textContent=a.text||""; else $("customerAgreementText").innerHTML='<div class="agreement-empty-state"><b>No agreement is currently awaiting your acceptance.</b><p>When a new customer agreement is published, it will appear here and you will receive a notification in your account.</p></div>';
+      $("customerAgreementPill").textContent=c.accepted?"ACCEPTED":(a.ready?"ACTION REQUIRED":"UP TO DATE");$("customerAgreementPill").className=`status-pill ${c.accepted||!a.ready?"success":"warning"}`;
+      $("agreementAcceptedState").className=`account-status-card ${c.accepted||!a.ready?"success":"action"}`;
+      $("agreementAcceptedState").innerHTML=c.accepted?`<b>Agreement accepted</b><p>Accepted on ${esc(fmt(c.accepted_at))}. No further action is required for this version.</p>`:(a.ready?`<b>Your confirmation is required</b><p>Please review the agreement and confirm using your legal name.</p>`:`<b>Your agreements are up to date</b><p>There is nothing for you to sign right now.</p>`);
+      form.hidden=c.accepted||!a.ready;};
+    try{await load();}catch(err){if(!sessionFailure(err))setMessage($("customerAgreementMessage"),"We could not load your agreement right now. Please retry.","error");}
+    form.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(form);try{await api("customerAcceptAgreement",{token,accepted_name:f.get("accepted_name"),consent:Boolean(f.get("consent")),user_agent:navigator.userAgent});setMessage($("customerAgreementMessage"),"Agreement accepted successfully.","success");await load();}catch(err){setMessage($("customerAgreementMessage"),err.message,"error");}});
+  }
+
+
+  function notificationBellMarkup(){return `<div class="notification-center"><button class="notification-bell" type="button" aria-label="Notifications" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg><span class="notification-badge" hidden>0</span></button><div class="notification-popover" hidden><div class="notification-head"><b>Notifications</b><span>Account updates</span></div><div class="notification-list"><div class="notification-empty">Checking your account…</div></div></div></div>`;}
+  async function initCustomerNotificationCenter(){
+    if(isAdminPage()||!Session.getCustomer())return;const top=document.querySelector(".main .topbar");if(!top)return;
+    const host=document.createElement("div");host.setAttribute("data-customer-notification-center","");host.innerHTML=notificationBellMarkup();top.appendChild(host);
+    const center=host.querySelector(".notification-center"),btn=center.querySelector(".notification-bell"),pop=center.querySelector(".notification-popover");btn.addEventListener("click",()=>{pop.hidden=!pop.hidden;btn.setAttribute("aria-expanded",String(!pop.hidden));});document.addEventListener("click",e=>{if(!e.target.closest(".notification-center"))pop.hidden=true;});
+    try{const r=await api("customerPortalState",{token:Session.getCustomer()}),items=[];
+      if(r.compliance?.agreement_required&&!r.compliance?.agreement_accepted)items.push({kind:"critical",title:"Agreement requires your confirmation",body:`${r.compliance.agreement_title||"Customer Agreement"} · Version ${r.compliance.agreement_version||""}`,href:"agreement.html"});
+      if(r.customer?.kyc_status!=="APPROVED")items.push({kind:r.kyc_desk?.accepting?"action":"",title:r.kyc_desk?.accepting?"Live KYC is available":"Live KYC is currently paused",body:r.kyc_desk?.message||"Your KYC requirements are available in the KYC & Documents section.",href:"kyc.html"});
+      if(r.meet?.meet_url)items.unshift({kind:"action",title:"Your KYC meeting is ready",body:"A Google Meet link is available for your live verification.",href:"kyc.html"});
+      const badge=center.querySelector(".notification-badge"),list=center.querySelector(".notification-list"),count=items.filter(x=>x.kind==="critical"||x.kind==="action").length;badge.textContent=String(count);badge.hidden=count===0;list.innerHTML=items.length?items.map(x=>`<a class="notification-item ${esc(x.kind)}" href="${esc(x.href)}"><b>${esc(x.title)}</b><p>${esc(x.body)}</p></a>`).join(""):'<div class="notification-empty">You are all caught up.</div>';
+    }catch(_){center.querySelector(".notification-list").innerHTML='<div class="notification-empty">Notifications are temporarily unavailable.</div>';}
+  }
 
   // ADMIN LOGIN: password -> email OTP -> Google Authenticator TOTP
   async function initAdminLogin() {
@@ -666,8 +692,10 @@
     try{
       const r=await adminCall("adminAgreementGet");
       const a=r.agreement||{};
+      form.company_name.value=a.company_name||"SARKSH GROW FIN-TECH PRIVATE LIMITED";
       form.title.value=a.title||"";
       form.version.value=a.version||"";
+      form.effective_date.value=a.effective_date||"";
       form.text.value=a.text||"";
       form.ready.checked=Boolean(a.ready);
       const pill=$("agreementReadyPill");
@@ -680,10 +708,10 @@
       const f=new FormData(form);
       try{
         const r=await adminCall("adminAgreementSave",{
-          title:f.get("title"),version:f.get("version"),text:f.get("text"),
+          company_name:f.get("company_name"),title:f.get("title"),version:f.get("version"),effective_date:f.get("effective_date"),text:f.get("text"),
           ready:Boolean(f.get("ready"))
         });
-        setMessage($("agreementAdminMessage"),`Agreement saved. SHA-256: ${r.hash}`,"success");
+        setMessage($("agreementAdminMessage"),r.ready?"Agreement published for customers.":"Agreement saved as inactive.","success");
         const pill=$("agreementReadyPill");
         pill.textContent=r.ready?"ACTIVE":"NOT ACTIVE";
         pill.className=`status-pill ${r.ready?"success":"warning"}`;
@@ -773,6 +801,7 @@
     await initCustomerSettings();
     await initCustomerTeam();
     await initCustomerAgreement();
+    await initCustomerNotificationCenter();
     initAdminCustomerTeamAssignment();
   }
 

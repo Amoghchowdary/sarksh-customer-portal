@@ -13,11 +13,11 @@
 <section class="content-grid">
 <article class="panel span2">
 <p class="eyebrow">GOVERNING DOCUMENT</p><h2>Agreement shown during registration</h2>
-<p class="muted">The agreement text is stored in the private Google Sheet through Apps Script. Personal PAN/address/contract text is not placed in the public GitHub frontend.</p>
+<p class="muted">Publish the customer-facing agreement here. Customers will only be asked to sign after the agreement is marked active.</p>
 <form id="agreementAdminForm" class="stack">
-<div class="grid2"><label>Agreement title<input name="title" required /></label><label>Version<input name="version" required placeholder="v1-2026-09"/></label></div>
+<div class="grid2"><label>Company<input name="company_name" value="SARKSH GROW FIN-TECH PRIVATE LIMITED" required /></label><label>Agreement title<input name="title" required /></label></div><div class="grid2"><label>Version<input name="version" required placeholder="1.0"/></label><label>Effective date<input name="effective_date" type="date"/></label></div>
 <label>Agreement text<textarea name="text" rows="18" required placeholder="Paste the reviewed agreement text here…"></textarea></label>
-<label class="checkbox"><input type="checkbox" name="ready"/><span>Make this agreement active for new customer registration.</span></label>
+<label class="checkbox"><input type="checkbox" name="ready"/><span>Publish this agreement for all customers. New customers sign during registration; existing customers receive an account notification.</span></label>
 <button class="btn primary" type="submit">Save Agreement</button>
 </form><div id="agreementAdminMessage" class="form-message"></div>
 </article>
@@ -27,4 +27,4 @@
 <div class="security-callout"><b>Do not publish private contract data in GitHub.</b><p>Keep the legal document in the backend data layer. The frontend receives only the current agreement for the registration session.</p></div>
 </article>
 </section></main></div>
-<script src="../js/app.js?v=8.0.0"></script></body></html>
+<script src="../js/app.js?v=9.0.0"></script></body></html>
