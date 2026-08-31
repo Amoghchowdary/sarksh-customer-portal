@@ -11,7 +11,7 @@
  */
 
 const SARKSH = {
-  VERSION: '6.0.0',
+  VERSION: '8.0.0',
   TIMEZONE: 'Asia/Kolkata',
   SESSION_HOURS: 12,
   PASSWORD_ITERATIONS: 1200,
@@ -20,6 +20,8 @@ const SARKSH = {
   VIDEO_MAX_BYTES: 3 * 1024 * 1024,
   DOCUMENT_MAX_BYTES: 2 * 1024 * 1024,
   PROP_AADHAAR_PEPPER: 'SARKSH_AADHAAR_PEPPER',
+  PROP_HASH_KEY_ACTIVE: 'SARKSH_HASH_KEY_ACTIVE',
+  PROP_HASH_KEY_PREFIX: 'SARKSH_HASH_KEY_V',
   PROP_SHEET_ID: 'SARKSH_SHEET_ID',
   PROP_KYC_FOLDER_ID: 'SARKSH_KYC_FOLDER_ID',
   PRIMARY_ADMIN_EMAIL: 'grow@sarksh.in',
@@ -58,8 +60,8 @@ const HEADERS = {
   '03_ADMINS':['admin_id','name','email','password_hash','password_salt','role','status','created_at','last_login','otp_email','totp_secret','totp_enabled','failed_attempts','locked_until'],
   '04_ROLES':['role','description'],
   '05_SESSIONS':['session_id','token_hash','user_id','role','created_at','expires_at','last_seen','revoked'],
-  '06_KYC':['kyc_id','customer_id','pan','dob','address','identity_ref','aadhaar_masked','aadhaar_hmac','aadhaar_mode','status','submitted_at','reviewed_at','reviewed_by','remarks','video_file_id','video_view_url'],
-  '07_KYC_DOCUMENTS':['document_id','customer_id','document_type','file_id','file_url','file_name','mime_type','status','uploaded_by','remarks','masked_reference','sha256','created_at'],
+  '06_KYC':['kyc_id','customer_id','pan','dob','address','identity_ref','aadhaar_masked','aadhaar_hmac','aadhaar_ciphertext','kms_key_resource','aadhaar_hash_key_version','aadhaar_hash_scheme','aadhaar_mode','status','submitted_at','reviewed_at','reviewed_by','remarks','video_file_id','video_view_url'],
+  '07_KYC_DOCUMENTS':['document_id','customer_id','document_type','file_id','file_url','file_name','mime_type','status','uploaded_by','remarks','masked_reference','sha256','integrity_hmac','integrity_key_version','integrity_scheme','created_at'],
   '08_TRADES':['trade_id','customer_id','trade_date','symbol','exchange','trade_type','quantity','entry_price','exit_price','gross_pnl','charges','net_pnl','status','entered_by','created_at','updated_at'],
   '09_ACCOUNTS':['account_id','customer_id','status','opening_balance','created_at','updated_at'],
   '10_LEDGER':['transaction_id','customer_id','date','type','amount','signed_amount','reference','description','created_at','created_by'],
@@ -109,6 +111,8 @@ function setupSarkshPortal() {
   ensureSetting_('registration_agreement_version','DRAFT-NOT-CONFIGURED');
   ensureSetting_('registration_agreement_text','Agreement document has not yet been configured by the Super Admin.');
   ensureSetting_('registration_agreement_ready','FALSE');
+  ensureSetting_('live_kyc_accepting','FALSE');
+  ensureSetting_('live_kyc_message','Live KYC intake is currently unavailable. Please check again later.');
   ensureAadhaarPepper_();
 
   Logger.log('SARKSH V5 backend ready.');
@@ -121,13 +125,13 @@ function setupSarkshPortal() {
  * Makes a Drive copy of the existing database, then performs an additive schema migration.
  * Existing customer rows, trades, ledger entries, sessions and KYC records are never cleared.
  */
-function migrateExistingDatabaseToV6() {
+function migrateExistingDatabaseToV8() {
   const props=PropertiesService.getScriptProperties();
   const sheetId=props.getProperty(SARKSH.PROP_SHEET_ID);
   if(!sheetId) throw new Error('Existing SARKSH database property not found. Do not continue until the V3 Apps Script project is being used.');
 
   const ss=SpreadsheetApp.openById(sheetId);
-  const backupName='SARKSH Portal DB PRE-V6 '+Utilities.formatDate(new Date(),SARKSH.TIMEZONE,'yyyy-MM-dd_HH-mm-ss');
+  const backupName='SARKSH Portal DB PRE-V8 '+Utilities.formatDate(new Date(),SARKSH.TIMEZONE,'yyyy-MM-dd_HH-mm-ss');
   const backup=DriveApp.getFileById(sheetId).makeCopy(backupName);
 
   appendMigrationBackupLog_(backup);
@@ -139,12 +143,15 @@ function migrateExistingDatabaseToV6() {
   ensureSetting_('registration_agreement_version','DRAFT-NOT-CONFIGURED');
   ensureSetting_('registration_agreement_text','Agreement document has not yet been configured by the Super Admin.');
   ensureSetting_('registration_agreement_ready','FALSE');
+  ensureSetting_('live_kyc_accepting','FALSE');
+  ensureSetting_('live_kyc_message','Live KYC intake is currently unavailable. Please check again later.');
   ensureAadhaarPepper_();
+  ensureInternalHashVault_();
 
   Logger.log('EXISTING CUSTOMER DATABASE PRESERVED.');
   Logger.log('Live database: '+ss.getUrl());
   Logger.log('Pre-V5 backup: '+backup.getUrl());
-  Logger.log('Only missing V6 tabs/columns were added. Existing customer rows were preserved.');
+  Logger.log('Only missing V8 tabs/columns were added. Existing customer rows were preserved.');
   return {database_url:ss.getUrl(),backup_url:backup.getUrl()};
 }
 
@@ -154,7 +161,7 @@ function appendMigrationBackupLog_(file) {
     const h=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
     const row={
       backup_id:makeId_('BAK'),timestamp:now_(),status:'SUCCESS',
-      reference:file.getId(),detail:'Automatic pre-V6 migration backup'
+      reference:file.getId(),detail:'Automatic pre-V8 migration backup'
     };
     sh.appendRow(h.map(k=>row[k]===undefined?'':row[k]));
   }catch(_){}
@@ -216,6 +223,7 @@ function doGet() {
 }
 
 function doPost(e) {
+  resetRequestContext_();
   const started = Date.now();
   let payload = {};
   try {
@@ -244,6 +252,8 @@ function doPost(e) {
       customerSettingsSave: customerSettingsSave_,
       customerChangePassword: customerChangePassword_,
       customerTeam: customerTeam_,
+      customerAgreementGet: customerAgreementGet_,
+      customerAcceptAgreement: customerAcceptAgreement_,
       getKyc: getKyc_,
       submitKyc: submitKyc_,
       uploadKycVideo: uploadKycVideo_,
@@ -256,6 +266,8 @@ function doPost(e) {
       adminCustomerDetail: adminCustomerDetail_,
       adminCustomerDashboard: adminCustomerDashboard_,
       adminKycQueue: adminKycQueue_,
+      adminKycAvailabilityGet: adminKycAvailabilityGet_,
+      adminKycAvailabilitySet: adminKycAvailabilitySet_,
       reviewKyc: reviewKyc_,
       adminTrades: adminTrades_,
       adminCreateTrade: adminCreateTrade_,
@@ -271,7 +283,7 @@ function doPost(e) {
       adminAgreementSave: adminAgreementSave_,
       agentLiveKycQueue: agentLiveKycQueue_,
       agentAcceptLiveKyc: agentAcceptLiveKyc_,
-      agentCreateMeetKyc: agentCreateMeetKyc_,
+      agentPublishMeetKyc: agentPublishMeetKyc_,
       agentMarkLiveKycConnected: agentMarkLiveKycConnected_,
       agentCompleteLiveKyc: agentCompleteLiveKyc_
     };
@@ -296,6 +308,10 @@ function doPost(e) {
   }
 }
 
+let __requestDb=null,__requestSheets={},__requestRows={};
+function resetRequestContext_(){__requestDb=null;__requestSheets={};__requestRows={};}
+function invalidateRows_(name){delete __requestRows[name];}
+
 /* =========================================================
    DATABASE HELPERS
    ========================================================= */
@@ -314,40 +330,21 @@ function ensureSheetSchema_(spreadsheet,name,headers) {
   sh.setFrozenRows(1);
 }
 
-function db_() {
-  const id = PropertiesService.getScriptProperties().getProperty(SARKSH.PROP_SHEET_ID);
-  if (!id) throw new Error('Database is not configured. Run setupSarkshPortal().');
-  return SpreadsheetApp.openById(id);
-}
+function db_(){if(__requestDb)return __requestDb;const id=PropertiesService.getScriptProperties().getProperty(SARKSH.PROP_SHEET_ID);if(!id)throw new Error('Database is not configured.');__requestDb=SpreadsheetApp.openById(id);return __requestDb;}
 
-function sheet_(name) {
-  const sh = db_().getSheetByName(name);
-  if (!sh) throw new Error('Missing database tab: ' + name);
-  return sh;
-}
 
-function getRows_(name) {
-  const sh = sheet_(name);
-  const range = sh.getDataRange();
-  const values = range.getValues();
-  if (values.length < 2) return [];
-  const headers = values[0].map(String);
-  return values.slice(1)
-    .map((row, i) => ({row, rowNo:i+2}))
-    .filter(x => x.row.some(v => v !== '' && v !== null))
-    .map(x => {
-      const out = {};
-      headers.forEach((h,j) => out[h] = x.row[j]);
-      out.__row = x.rowNo;
-      return out;
-    });
-}
+function sheet_(name){if(__requestSheets[name])return __requestSheets[name];const sh=db_().getSheetByName(name);if(!sh)throw new Error('Missing database tab: '+name);__requestSheets[name]=sh;return sh;}
+
+
+function getRows_(name){if(__requestRows[name])return __requestRows[name];const sh=sheet_(name),v=sh.getDataRange().getValues();if(v.length<2){__requestRows[name]=[];return __requestRows[name];}const h=v[0].map(String);__requestRows[name]=v.slice(1).map((row,i)=>({row,rowNo:i+2})).filter(x=>x.row.some(v=>v!==''&&v!==null)).map(x=>{const o={};h.forEach((k,j)=>o[k]=x.row[j]);o.__row=x.rowNo;return o;});return __requestRows[name];}
+
 
 function appendRow_(name, obj) {
   return withWriteLock_(() => {
     const sh = sheet_(name);
     const headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
     sh.appendRow(headers.map(k => obj[k] === undefined ? '' : obj[k]));
+    invalidateRows_(name);
     return true;
   });
 }
@@ -361,6 +358,7 @@ function updateRow_(name, rowNo, patch) {
       if (Object.prototype.hasOwnProperty.call(patch,k)) current[i] = patch[k];
     });
     sh.getRange(rowNo,1,1,headers.length).setValues([current]);
+    invalidateRows_(name);
     return true;
   });
 }
@@ -371,12 +369,14 @@ function updateRowUnlocked_(name,rowNo,patch) {
   const current=sh.getRange(rowNo,1,1,headers.length).getValues()[0];
   headers.forEach((k,i)=>{if(Object.prototype.hasOwnProperty.call(patch,k))current[i]=patch[k];});
   sh.getRange(rowNo,1,1,headers.length).setValues([current]);
+  invalidateRows_(name);
 }
 
 function appendRowUnlocked_(name,obj) {
   const sh=sheet_(name);
   const headers=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
   sh.appendRow(headers.map(k=>obj[k]===undefined?'':obj[k]));
+  invalidateRows_(name);
 }
 
 
@@ -548,16 +548,64 @@ function ensureAadhaarPepper_() {
   if(!props.getProperty(SARKSH.PROP_AADHAAR_PEPPER))
     props.setProperty(SARKSH.PROP_AADHAAR_PEPPER,Utilities.getUuid().replace(/-/g,'')+Utilities.getUuid().replace(/-/g,''));
 }
-function aadhaarReference_(value) {
-  const n=String(value||'').replace(/\D/g,'');
-  if(!n) return {masked:'',hmac:'',mode:''};
-  if(!/^[2-9][0-9]{11}$/.test(n)) throw new Error('Aadhaar number must be a valid 12-digit number.');
-  ensureAadhaarPepper_();
-  const pepper=PropertiesService.getScriptProperties().getProperty(SARKSH.PROP_AADHAAR_PEPPER);
-  const sig=Utilities.computeHmacSha256Signature(n,pepper,Utilities.Charset.UTF_8);
-  const hmac=sig.map(b=>('0'+((b<0?b+256:b).toString(16))).slice(-2)).join('');
-  return {masked:'XXXX-XXXX-'+n.slice(-4),hmac,mode:'NUMBER'};
+function ensureInternalHashVault_() {
+  const props=PropertiesService.getScriptProperties();
+  let active=Number(props.getProperty(SARKSH.PROP_HASH_KEY_ACTIVE)||0);
+  if(!active){
+    active=1;
+    const key=Utilities.getUuid().replace(/-/g,'')+Utilities.getUuid().replace(/-/g,'')+Utilities.getUuid().replace(/-/g,'');
+    props.setProperty(SARKSH.PROP_HASH_KEY_PREFIX+active,key);
+    props.setProperty(SARKSH.PROP_HASH_KEY_ACTIVE,String(active));
+  }
+  const key=props.getProperty(SARKSH.PROP_HASH_KEY_PREFIX+active);
+  if(!key) throw new Error('Internal hash vault key is missing.');
+  return {version:active,key};
 }
+function activeHashVault_(){return ensureInternalHashVault_();}
+function rotateSarkshInternalHashKey(){
+  const props=PropertiesService.getScriptProperties(),current=ensureInternalHashVault_(),next=current.version+1;
+  const key=Utilities.getUuid().replace(/-/g,'')+Utilities.getUuid().replace(/-/g,'')+Utilities.getUuid().replace(/-/g,'');
+  props.setProperty(SARKSH.PROP_HASH_KEY_PREFIX+next,key);
+  props.setProperty(SARKSH.PROP_HASH_KEY_ACTIVE,String(next));
+  Logger.log('Internal keyed-hash vault rotated to version '+next+'. Previous keys were retained for historical verification.');
+  return next;
+}
+function keyedHmacHex_(value,key){
+  const sig=Utilities.computeHmacSha256Signature(String(value),String(key),Utilities.Charset.UTF_8);
+  return sig.map(b=>('0'+((b<0?b+256:b).toString(16))).slice(-2)).join('');
+}
+function internalHash_(value,context){
+  const v=activeHashVault_();
+  return {hmac:keyedHmacHex_(String(context||'')+'|'+String(value),v.key),key_version:v.version,scheme:'HMAC-SHA256'};
+}
+function verifyInternalHash_(value,context,expected,keyVersion){
+  const props=PropertiesService.getScriptProperties(),key=props.getProperty(SARKSH.PROP_HASH_KEY_PREFIX+Number(keyVersion||0));
+  if(!key)return false;
+  return keyedHmacHex_(String(context||'')+'|'+String(value),key)===String(expected||'');
+}
+function internalHashVaultStatus(){
+  const v=ensureInternalHashVault_();
+  Logger.log('Internal keyed-hash vault active key version: '+v.version);
+  return {active_key_version:v.version,scheme:'HMAC-SHA256'};
+}
+
+function aadhaarReference_(value,contextId) {
+  const n=String(value||'').replace(/\D/g,'');
+  if(!n)return {masked:'',hmac:'',ciphertext:'',kms_key_resource:'',key_version:'',scheme:'',mode:''};
+  if(!/^[2-9][0-9]{11}$/.test(n))throw new Error('Aadhaar number must be a valid 12-digit number.');
+  const h=internalHash_(n,'AADHAAR|'+String(contextId||''));
+  return {
+    masked:'XXXX-XXXX-'+n.slice(-4),
+    hmac:h.hmac,
+    ciphertext:'',
+    kms_key_resource:'',
+    key_version:h.key_version,
+    scheme:h.scheme,
+    mode:'NUMBER'
+  };
+}
+
+
 function sanitizeDocType_(t) {
   const v=String(t||'').toUpperCase();
   const allowed=['PAN_CARD','AADHAAR','ADDRESS_PROOF','PHOTO','OTHER'];
@@ -581,7 +629,9 @@ function saveKycDocument_(customerId,documentType,fileName,mimeType,fileBase64,u
   appendRow_(TABS.KYC_DOCS,{
     document_id:makeId_('DOC'),customer_id:customerId,document_type:type,file_id:file.getId(),file_url:file.getUrl(),
     file_name:String(fileName||safeName),mime_type:mime,status:'RECEIVED',uploaded_by:uploadedBy||'CUSTOMER',
-    remarks:'',masked_reference:String(reference||''),sha256:hexDigest_(Utilities.base64Encode(bytes)),created_at:now_()
+    remarks:'',masked_reference:String(reference||''),sha256:hexDigest_(Utilities.base64Encode(bytes)),
+    integrity_hmac:internalHash_(Utilities.base64Encode(bytes),'KYC-DOC|'+customerId+'|'+type).hmac,
+    integrity_key_version:activeHashVault_().version,integrity_scheme:'HMAC-SHA256',created_at:now_()
   });
   return file;
 }
@@ -607,6 +657,12 @@ function systemLog_(level,event,detail) {
   appendRow_(TABS.SYSTEM,{log_id:makeId_('SYS'),timestamp:now_(),level,event,detail:detail||''});
 }
 
+function currentAgreementCompliance_(customerId){const a=currentAgreement_();if(!a.ready)return {agreement_required:false,agreement_accepted:true,agreement_title:a.title,agreement_version:a.version};const c=getRows_(TABS.CONSENTS).filter(x=>x.customer_id===customerId&&x.status==='ACCEPTED').sort((x,y)=>String(y.accepted_at).localeCompare(String(x.accepted_at))).find(x=>String(x.agreement_hash)===a.hash&&String(x.agreement_version)===a.version);return {agreement_required:true,agreement_accepted:Boolean(c),agreement_title:a.title,agreement_version:a.version,agreement_hash:a.hash,accepted_name:c?c.accepted_name:'',accepted_at:c?c.accepted_at:''};}
+function requireCurrentAgreement_(customerId){const c=currentAgreementCompliance_(customerId);if(c.agreement_required&&!c.agreement_accepted)throw new Error('Current agreement must be accepted before live KYC can proceed.');return c;}
+function customerAgreementGet_(p){const ctx=customerContext_(p.token),a=currentAgreement_(),c=currentAgreementCompliance_(ctx.customer.customer_id);return {ok:true,agreement:a,compliance:{accepted:c.agreement_accepted,accepted_name:c.accepted_name||'',accepted_at:c.accepted_at||''}};}
+function customerAcceptAgreement_(p){const ctx=customerContext_(p.token),a=currentAgreement_();if(!a.ready)throw new Error('No active agreement is published.');if(p.consent!==true)throw new Error('Agreement consent is required.');const name=String(p.accepted_name||'').trim();if(name.toLowerCase()!==String(ctx.customer.full_name||'').trim().toLowerCase())throw new Error('Typed legal name must match customer profile.');if(currentAgreementCompliance_(ctx.customer.customer_id).agreement_accepted)return {ok:true,already_accepted:true};appendRow_(TABS.CONSENTS,{consent_id:makeId_('CON'),customer_id:ctx.customer.customer_id,agreement_title:a.title,agreement_version:a.version,agreement_hash:a.hash,accepted_name:name,accepted_at:now_(),request_id:String(p.request_id||''),user_agent:String(p.user_agent||''),status:'ACCEPTED'});audit_(ctx.user.user_id,'CUSTOMER','AGREEMENT_ACCEPT','CUSTOMER',ctx.customer.customer_id,'SUCCESS',JSON.stringify({version:a.version,hash:a.hash}));return {ok:true};}
+function kycDeskStatus_(){return {accepting:String(getSetting_('live_kyc_accepting','FALSE')).toUpperCase()==='TRUE',message:String(getSetting_('live_kyc_message','Live KYC intake is currently unavailable. Please check again later.'))};}
+
 /* =========================================================
    CUSTOMER AUTH / REGISTRATION
    ========================================================= */
@@ -620,7 +676,7 @@ function registerCustomer_(p) {
   const pan=String(p.pan||'').trim().toUpperCase();
   const dob=String(p.dob||'').trim(), address=String(p.address||'').trim();
   const identityRef=String(p.identity_ref||'').trim();
-  const aadhaar=aadhaarReference_(p.aadhaar_number);
+  const aadhaarRaw=String(p.aadhaar_number||'');
   const acceptedName=String(p.accepted_name||'').trim();
   const agreement=currentAgreement_();
 
@@ -638,6 +694,7 @@ function registerCustomer_(p) {
   if(getRows_(TABS.USERS).some(x=>normalizeEmail_(x.email)===email)) throw new Error('Email is already registered.');
 
   const customerId=makeId_(SARKSH.CUSTOMER_PREFIX), userId=makeId_('USR'), salt=newSalt_();
+  const aadhaar=aadhaarReference_(aadhaarRaw,customerId);
   const rawToken=Utilities.base64EncodeWebSafe(
     Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,Utilities.getUuid()+':'+Date.now()+':'+email)
   ).replace(/=+$/,'');
@@ -654,7 +711,7 @@ function registerCustomer_(p) {
     });
     appendRowUnlocked_(TABS.KYC,{
       kyc_id:makeId_('KYC'),customer_id:customerId,pan,dob,address,identity_ref:identityRef,
-      aadhaar_masked:aadhaar.masked,aadhaar_hmac:aadhaar.hmac,aadhaar_mode:aadhaar.mode,
+      aadhaar_masked:aadhaar.masked,aadhaar_hmac:aadhaar.hmac,aadhaar_ciphertext:'',kms_key_resource:'',aadhaar_hash_key_version:aadhaar.key_version,aadhaar_hash_scheme:aadhaar.scheme,aadhaar_mode:aadhaar.mode,
       status:'WAITING_LIVE_KYC',submitted_at:created,reviewed_at:'',reviewed_by:'',remarks:'',
       video_file_id:'',video_view_url:''
     });
@@ -740,7 +797,7 @@ function registrationResumeStatus_(p) {
   const hasAadhaarNumber=Boolean(k.aadhaar_hmac);
   const ready=hasPan && (hasAadhaarDoc || hasAadhaarNumber);
   const meet=getRows_(TABS.KYC_LIVE).filter(x=>x.customer_id===reg.customer_id && ['WAITING_AGENT','AGENT_JOINING','MEET_PENDING','MEET_READY','LIVE'].includes(String(x.status))).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0]||null;
-  return {ok:true,customer_id:reg.customer_id,documents:docs,ready_for_queue:ready,
+  return {ok:true,customer_id:reg.customer_id,documents:docs,ready_for_queue:ready,kyc_desk:kycDeskStatus_(),
     queue_requirement:ready?'':'Upload PAN Card and either provide Aadhaar number or upload Aadhaar document.',
     aadhaar_masked:k.aadhaar_masked||'',meet:meet?{session_id:meet.session_id,status:meet.status,meet_url:meet.meet_url||''}:null};
 }
@@ -799,11 +856,12 @@ function customerDashboard_(p) {
     .reduce((arr,x)=>{arr.push((arr.length?arr[arr.length-1]:0)+Number(x.signed_amount||0));return arr;},[])
     .slice(-30);
   const settings=getRows_(TABS.CUSTOMER_PREFS).find(x=>x.customer_id===c.customer_id)||{};
+  const compliance=currentAgreementCompliance_(c.customer_id),kycDesk=kycDeskStatus_();
   return {
     ok:true,
     customer:{full_name:c.full_name,account_status:c.account_status,kyc_status:c.kyc_status},
     settings:{preferred_name:settings.preferred_name||'',compact_dashboard:String(settings.compact_dashboard||'FALSE'),show_trade_quality:String(settings.show_trade_quality||'TRUE')},
-    metrics,recent_trades:recent,performance
+    compliance,kyc_desk:kycDesk,metrics,recent_trades:recent,performance
   };
 }
 
@@ -821,7 +879,7 @@ function getKycCenter_(p) {
   const ctx=customerContext_(p.token),c=ctx.customer;
   const k=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id)||null;
   const meet=getRows_(TABS.KYC_LIVE).filter(x=>x.customer_id===c.customer_id && ['WAITING_AGENT','AGENT_JOINING','MEET_PENDING','MEET_READY','LIVE'].includes(String(x.status))).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0]||null;
-  return {ok:true,kyc:k,documents:safeCustomerDocs_(c.customer_id,false),meet:meet?{session_id:meet.session_id,status:meet.status,meet_url:resolveStoredMeet_(meet)}:null};
+  return {ok:true,kyc:k,documents:safeCustomerDocs_(c.customer_id,false),kyc_desk:kycDeskStatus_(),compliance:currentAgreementCompliance_(c.customer_id),meet:meet?{session_id:meet.session_id,status:meet.status,meet_url:resolveStoredMeet_(meet)}:null};
 }
 function uploadCustomerDocument_(p) {
   const ctx=customerContext_(p.token);
@@ -831,6 +889,8 @@ function uploadCustomerDocument_(p) {
 }
 function requestCustomerMeetKyc_(p) {
   const ctx=customerContext_(p.token),c=ctx.customer;
+  const desk=kycDeskStatus_();if(!desk.accepting)throw new Error(desk.message||'Live KYC intake is sleeping.');
+  requireCurrentAgreement_(c.customer_id);
   const active=getRows_(TABS.KYC_LIVE).filter(x=>x.customer_id===c.customer_id && ['WAITING_AGENT','AGENT_JOINING','MEET_PENDING','MEET_READY','LIVE'].includes(String(x.status)))[0];
   if(active)return {ok:true,session_id:active.session_id};
   const k=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id)||{};
@@ -857,13 +917,13 @@ function getKyc_(p) {
 function submitKyc_(p) {
   const ctx=customerContext_(p.token), c=ctx.customer;
   const pan=String(p.pan||'').toUpperCase().trim();
-  const aadhaar=aadhaarReference_(p.aadhaar_number);
+  const aadhaar=aadhaarReference_(p.aadhaar_number,c.customer_id);
   if(pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) throw new Error('PAN format is invalid.');
 
   const existing=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id);
   const patch={
     customer_id:c.customer_id,pan,dob:String(p.dob||''),address:String(p.address||''),
-    identity_ref:String(p.identity_ref||''),aadhaar_masked:aadhaar.masked||existing?.aadhaar_masked||'',aadhaar_hmac:aadhaar.hmac||existing?.aadhaar_hmac||'',aadhaar_mode:aadhaar.mode||existing?.aadhaar_mode||'',status:'PENDING',submitted_at:now_(),
+    identity_ref:String(p.identity_ref||''),aadhaar_masked:aadhaar.masked||existing?.aadhaar_masked||'',aadhaar_hmac:aadhaar.hmac||existing?.aadhaar_hmac||'',aadhaar_ciphertext:'',kms_key_resource:'',aadhaar_hash_key_version:aadhaar.key_version||existing?.aadhaar_hash_key_version||'',aadhaar_hash_scheme:aadhaar.scheme||existing?.aadhaar_hash_scheme||'',aadhaar_mode:aadhaar.mode||existing?.aadhaar_mode||'',status:'PENDING',submitted_at:now_(),
     reviewed_at:'',reviewed_by:'',remarks:''
   };
   if(existing) updateRow_(TABS.KYC,existing.__row,patch);
@@ -1013,10 +1073,10 @@ function adminDashboard_(p) {
   };
 }
 
-function adminCustomers_(p) {
-  requireAdmin_(p.token);
-  return {ok:true,customers:getRows_(TABS.CUSTOMERS).map(c=>({...c,...metricsForCustomer_(c.customer_id)}))};
-}
+function metricsIndex_(){const o={},e=id=>o[id]||(o[id]={current_amount:0,amount_placed:0,net_pnl:0,total_trades:0,winning_trades:0,losing_trades:0,win_rate:0,closed:0});getRows_(TABS.TRADES).forEach(t=>{const m=e(t.customer_id);m.total_trades++;if(String(t.status)==='CLOSED'){const p=Number(t.net_pnl||0);m.net_pnl+=p;m.closed++;if(p>0)m.winning_trades++;if(p<0)m.losing_trades++;}});getRows_(TABS.LEDGER).forEach(l=>{const m=e(l.customer_id),s=Number(l.signed_amount||0);m.current_amount+=s;if(['OPENING_BALANCE','CREDIT'].includes(String(l.type)))m.amount_placed+=Math.max(0,s);});Object.keys(o).forEach(id=>{o[id].win_rate=o[id].closed?o[id].winning_trades/o[id].closed*100:0;delete o[id].closed;});return o;}
+
+function adminCustomers_(p){requireAdmin_(p.token);const idx=metricsIndex_(),zero={current_amount:0,amount_placed:0,net_pnl:0,total_trades:0,winning_trades:0,losing_trades:0,win_rate:0};return {ok:true,customers:getRows_(TABS.CUSTOMERS).map(c=>({...c,...(idx[c.customer_id]||zero)}))};}
+
 function adminCustomerDetail_(p) {
   requireAdmin_(p.token);
   const c=getRows_(TABS.CUSTOMERS).find(x=>x.customer_id===String(p.customer_id||''));
@@ -1053,6 +1113,8 @@ function liveSessionForCustomer_(sessionId,reg) {
 }
 function createLiveKycSession_(p) {
   const reg=registrationByToken_(p.registration_token);
+  const desk=kycDeskStatus_();if(!desk.accepting)throw new Error(desk.message||'Live KYC intake is sleeping.');
+  requireCurrentAgreement_(reg.customer_id);
   const kyc=getRows_(TABS.KYC).find(x=>x.customer_id===reg.customer_id)||{};
   const docs=safeCustomerDocs_(reg.customer_id,false);
   if(!docs.some(d=>d.document_type==='PAN_CARD')) throw new Error('PAN Card must be uploaded before joining KYC queue.');
@@ -1089,7 +1151,8 @@ function liveKycStatus_(p) {
     .filter(x=>String(x.status)==='WAITING_AGENT')
     .sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)));
   const pos=Math.max(1,waiting.findIndex(x=>x.session_id===s.session_id)+1);
-  return {ok:true,session:{
+  const desk=kycDeskStatus_();
+  return {ok:true,desk_accepting:desk.accepting,desk_message:desk.message,session:{
     session_id:s.session_id,status:s.status,result:s.result||'',remarks:s.remarks||'',meet_url:resolveStoredMeet_(s)
   },queue_position:String(s.status)==='WAITING_AGENT'?pos:0};
 }
@@ -1150,10 +1213,11 @@ function agentLiveKycQueue_(p) {
         status:s.status,pan_masked:pan?('PAN ****'+pan.slice(-4)):'',aadhaar_masked:k.aadhaar_masked||'',wait_minutes:Math.max(0,Math.floor((nowMs-new Date(s.created_at).getTime())/60000))
       };
     });
-  return {ok:true,sessions};
+  return {ok:true,accepting:kycDeskStatus_().accepting,sessions};
 }
 function agentAcceptLiveKyc_(p) {
   const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
+  if(!kycDeskStatus_().accepting)throw new Error('KYC desk is sleeping. Start the queue before accepting customers.');
   const s=getRows_(TABS.KYC_LIVE).find(x=>x.session_id===String(p.session_id||''));
   if(!s) throw new Error('Live KYC session not found.');
   if(s.assigned_agent_id && s.assigned_agent_id!==admin.admin_id && admin.role!=='SUPER_ADMIN')
@@ -1179,52 +1243,40 @@ function agentAcceptLiveKyc_(p) {
 }
 
 function resolveStoredMeet_(session) {
-  if(!session)return '';
-  if(session.meet_url)return String(session.meet_url);
-  if(!session.calendar_event_id)return '';
-  try{
-    const ev=Calendar.Events.get('primary',String(session.calendar_event_id));
-    const url=ev.hangoutLink || (((ev.conferenceData||{}).entryPoints||[]).find(x=>x.entryPointType==='video')||{}).uri || '';
-    if(url && session.__row) updateRow_(TABS.KYC_LIVE,session.__row,{meet_url:url,status:'MEET_READY'});
-    return url;
-  }catch(_){return '';}
+  return session ? String(session.meet_url||'') : '';
 }
+
 function grantAgentDocAccess_(customerId,email) {
   if(!email)return;
   getRows_(TABS.KYC_DOCS).filter(x=>x.customer_id===customerId && x.file_id).forEach(d=>{try{DriveApp.getFileById(d.file_id).addViewer(email);}catch(_){}});
 }
-function createGoogleMeet_(customer,admin,session) {
-  const start=new Date(Date.now()+60*1000),end=new Date(start.getTime()+30*60*1000);
-  const event={
-    summary:'SARKSH KYC Verification - '+customer.customer_id,
-    description:'Secure KYC verification session for SARKSH customer '+customer.customer_id+'. Do not include identity numbers in the Calendar event.',
-    start:{dateTime:start.toISOString(),timeZone:SARKSH.TIMEZONE},
-    end:{dateTime:end.toISOString(),timeZone:SARKSH.TIMEZONE},
-    attendees:[{email:String(customer.email)},{email:String(admin.email)}],
-    conferenceData:{createRequest:{requestId:Utilities.getUuid(),conferenceSolutionKey:{type:'hangoutsMeet'}}}
-  };
-  let created=Calendar.Events.insert(event,'primary',{conferenceDataVersion:1,sendUpdates:'all'});
-  let url=created.hangoutLink || (((created.conferenceData||{}).entryPoints||[]).find(x=>x.entryPointType==='video')||{}).uri || '';
-  for(let i=0;!url && i<4;i++){Utilities.sleep(700);created=Calendar.Events.get('primary',created.id);url=created.hangoutLink || (((created.conferenceData||{}).entryPoints||[]).find(x=>x.entryPointType==='video')||{}).uri || '';}
-  return {event_id:created.id,meet_url:url,start:start.toISOString(),end:end.toISOString()};
-}
-function agentCreateMeetKyc_(p) {
+function agentPublishMeetKyc_(p) {
   const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
   const s=getRows_(TABS.KYC_LIVE).find(x=>x.session_id===String(p.session_id||''));
   if(!s)throw new Error('Live KYC session not found.');
+  if(!kycDeskStatus_().accepting)throw new Error('KYC desk is sleeping.');
   if(s.assigned_agent_id && s.assigned_agent_id!==admin.admin_id && admin.role!=='SUPER_ADMIN')throw new Error('Session is assigned to another agent.');
-  const customer=getRows_(TABS.CUSTOMERS).find(x=>x.customer_id===s.customer_id);if(!customer)throw new Error('Customer not found.');
-  const existing=resolveStoredMeet_(s);if(existing)return {ok:true,meet_url:existing};
-  updateRow_(TABS.KYC_LIVE,s.__row,{assigned_agent_id:admin.admin_id,status:'MEET_PENDING',accepted_at:s.accepted_at||now_()});
+  const meetUrl=String(p.meet_url||'').trim();
+  if(!/^https:\/\/meet\.google\.com\/[a-z0-9-]+(?:[/?#].*)?$/i.test(meetUrl))
+    throw new Error('Enter a valid https://meet.google.com/ meeting URL.');
+  const customer=getRows_(TABS.CUSTOMERS).find(x=>x.customer_id===s.customer_id);
+  if(!customer)throw new Error('Customer not found.');
   grantAgentDocAccess_(s.customer_id,admin.email);
-  const meet=createGoogleMeet_(customer,admin,s);
-  updateRow_(TABS.KYC_LIVE,s.__row,{meet_url:meet.meet_url,calendar_event_id:meet.event_id,scheduled_start:meet.start,scheduled_end:meet.end,meet_created_at:now_(),status:meet.meet_url?'MEET_READY':'MEET_PENDING'});
-  if(meet.meet_url){
-    try{MailApp.sendEmail({to:customer.email,subject:'SARKSH KYC Google Meet is ready',htmlBody:'<p>Your SARKSH live KYC verification is ready.</p><p><a href="'+meet.meet_url+'">Join Google Meet</a></p><p>Customer reference: '+customer.customer_id+'</p>'});}catch(_){}
-  }
-  audit_(admin.admin_id,admin.role,'KYC_MEET_CREATE','CUSTOMER',s.customer_id,'SUCCESS',meet.event_id);
-  return {ok:true,meet_url:meet.meet_url,event_id:meet.event_id};
+  updateRow_(TABS.KYC_LIVE,s.__row,{
+    meet_url:meetUrl,calendar_event_id:'',scheduled_start:'',scheduled_end:'',meet_created_at:now_(),
+    status:'MEET_READY',assigned_agent_id:admin.admin_id,accepted_at:s.accepted_at||now_()
+  });
+  try{
+    MailApp.sendEmail({
+      to:customer.email,
+      subject:'SARKSH live KYC Google Meet is ready',
+      htmlBody:'<p>Your SARKSH live KYC verification link is ready.</p><p><a href="'+meetUrl+'">Join Google Meet</a></p><p>Customer reference: '+customer.customer_id+'</p>'
+    });
+  }catch(_){}
+  audit_(admin.admin_id,admin.role,'KYC_MEET_PUBLISH','CUSTOMER',s.customer_id,'SUCCESS',meetUrl);
+  return {ok:true,meet_url:meetUrl};
 }
+
 
 function agentMarkLiveKycConnected_(p) {
   const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
@@ -1287,17 +1339,14 @@ function agentCompleteLiveKyc_(p) {
   return {ok:true,result};
 }
 
+function adminKycAvailabilityGet_(p){requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN']);const s=kycDeskStatus_();return {ok:true,accepting:s.accepting,message:s.message};}
+function adminKycAvailabilitySet_(p){const a=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN']),accepting=p.accepting===true;const message=String(p.message||'').trim().slice(0,180)||(accepting?'Live KYC is available now.':'Live KYC intake is currently unavailable. Please check again later.');putSetting_('live_kyc_accepting',accepting?'TRUE':'FALSE');putSetting_('live_kyc_message',message);audit_(a.admin_id,a.role,'KYC_DESK_STATE','SETTINGS','live_kyc_accepting','SUCCESS',accepting?'ACTIVE':'SLEEPING');return {ok:true,accepting,message};}
+
 /* =========================================================
    ADMIN KYC
    ========================================================= */
-function adminKycQueue_(p) {
-  requireAdmin_(p.token,['SUPER_ADMIN','KYC_ADMIN','OPERATIONS_ADMIN','AUDITOR']);
-  const customers=getRows_(TABS.CUSTOMERS);
-  const items=getRows_(TABS.KYC).map(k=>({
-    ...k,full_name:(customers.find(c=>c.customer_id===k.customer_id)||{}).full_name||''
-  })).sort((a,b)=>String(b.submitted_at).localeCompare(String(a.submitted_at)));
-  return {ok:true,items};
-}
+function adminKycQueue_(p){requireAdmin_(p.token,['SUPER_ADMIN','KYC_ADMIN','OPERATIONS_ADMIN','AUDITOR']);const cm={};getRows_(TABS.CUSTOMERS).forEach(c=>cm[c.customer_id]=c);const lm={};getRows_(TABS.KYC_LIVE).forEach(s=>{if(!lm[s.customer_id]||String(s.created_at)>String(lm[s.customer_id].created_at))lm[s.customer_id]=s;});const items=getRows_(TABS.KYC).map(k=>{const c=cm[k.customer_id]||{},l=lm[k.customer_id]||{},pan=String(k.pan||'');return {customer_id:k.customer_id,full_name:c.full_name||'',submitted_at:k.submitted_at||'',status:k.status||'',pan_masked:pan?('PAN ****'+pan.slice(-4)):'',aadhaar_masked:k.aadhaar_masked||'',dob:k.dob||'',address:k.address||'',identity_ref:k.identity_ref||'',live_kyc_status:l.status||'NOT_STARTED'};}).sort((a,b)=>String(b.submitted_at).localeCompare(String(a.submitted_at)));return {ok:true,items};}
+
 function reviewKyc_(p) {
   const admin=requireAdmin_(p.token,['SUPER_ADMIN','KYC_ADMIN','OPERATIONS_ADMIN']);
   const status=String(p.status||'');
@@ -1365,14 +1414,8 @@ function adminCreateTrade_(p) {
   return {ok:true,trade};
 }
 
-function adminAccounts_(p) {
-  requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','AUDITOR']);
-  const accounts=getRows_(TABS.CUSTOMERS).map(c=>({
-    customer_id:c.customer_id,full_name:c.full_name,account_status:c.account_status,
-    ...metricsForCustomer_(c.customer_id)
-  }));
-  return {ok:true,accounts};
-}
+function adminAccounts_(p){requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','AUDITOR']);const idx=metricsIndex_(),zero={current_amount:0,amount_placed:0,net_pnl:0,total_trades:0,winning_trades:0,losing_trades:0,win_rate:0};return {ok:true,accounts:getRows_(TABS.CUSTOMERS).map(c=>({customer_id:c.customer_id,full_name:c.full_name,account_status:c.account_status,...(idx[c.customer_id]||zero)}))};}
+
 
 function adminLedgerEntry_(p) {
   const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN']);
@@ -1419,7 +1462,7 @@ function adminMonitoring_(p) {
     health:[
       {name:'Apps Script API',status:'ONLINE',detail:'Backend request completed.'},
       {name:'Google Sheets DB',status:'ONLINE',detail:customers.length+' customer records accessible.'},
-      {name:'KYC Drive',status:PropertiesService.getScriptProperties().getProperty(SARKSH.PROP_KYC_FOLDER_ID)?'ONLINE':'CONFIGURE',detail:'Private storage reference.'}
+      {name:'KYC Drive',status:PropertiesService.getScriptProperties().getProperty(SARKSH.PROP_KYC_FOLDER_ID)?'ONLINE':'CONFIGURE',detail:'Private storage reference.'},{name:'Internal Hash Vault',status:'ONLINE',detail:'HMAC-SHA256 active key version '+activeHashVault_().version+' stored in Script Properties.'}
     ],
     alerts
   };

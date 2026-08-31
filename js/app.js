@@ -11,7 +11,7 @@
     BACKEND_URL: "https://script.google.com/macros/s/AKfycbzvnPVHqRKhJZO8Qd3vtyF0K5_rYYwYTDWXCBZAZZFAZjqgTsBnx1dux6d2KM0PjYGkNA/exec",
     APP_NAME: "SARKSH Portal",
     VIDEO_MAX_MB: 3,
-    BUILD: "6.0.0"
+    BUILD: "8.0.0"
   };
 
 
@@ -35,36 +35,13 @@
   const fmt = (x) => x ? new Date(x).toLocaleString("en-IN") : "—";
 
   async function api(action, payload = {}) {
-    if (!CONFIG.BACKEND_URL || CONFIG.BACKEND_URL.includes("PASTE_")) {
-      throw new Error("Backend URL is not configured. Edit js/app.js.");
-    }
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-    try {
-      const response = await fetch(CONFIG.BACKEND_URL, {
-        method: "POST",
-        headers: {"Content-Type":"text/plain;charset=utf-8"},
-        body: JSON.stringify({
-          action,
-          request_id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
-          client_build: CONFIG.BUILD,
-          ...payload
-        }),
-        redirect: "follow",
-        cache: "no-store",
-        signal: controller.signal
-      });
-      if (!response.ok) throw new Error(`Backend HTTP ${response.status}`);
-      const data = await response.json();
-      if (!data || data.ok !== true) throw new Error(data?.error || "Backend request failed.");
-      return data;
-    } catch (err) {
-      if (err.name === "AbortError") throw new Error("Backend request timed out.");
-      throw err;
-    } finally {
-      clearTimeout(timeout);
-    }
+    if(!CONFIG.BACKEND_URL || CONFIG.BACKEND_URL.includes("PASTE_")) throw new Error("Backend URL is not configured.");
+    const reads=new Set(["customerDashboard","customerTrades","getKycCenter","customerMeetKycStatus","customerSettingsGet","customerTeam","customerAgreementGet","registrationResumeStatus","getRegistrationAgreement","liveKycStatus","adminDashboard","adminCustomers","adminCustomerDashboard","adminKycQueue","adminTrades","adminAccounts","adminMonitoring","adminAudit","adminKycAvailabilityGet","agentLiveKycQueue","adminAgreementGet","adminListAdmins"]);
+    const attempts=reads.has(action)?2:1;let last=null;
+    for(let i=1;i<=attempts;i++){const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);try{const response=await fetch(CONFIG.BACKEND_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action,request_id:crypto.randomUUID?crypto.randomUUID():String(Date.now()),client_build:CONFIG.BUILD,...payload}),redirect:"follow",cache:"no-store",signal:controller.signal});if(!response.ok)throw new Error(`Backend HTTP ${response.status}`);const data=await response.json();if(!data||data.ok!==true)throw new Error(data?.error||"Backend request failed.");return data;}catch(err){last=err.name==="AbortError"?new Error("Backend request timed out."):err;if(i<attempts)await new Promise(r=>setTimeout(r,450));}finally{clearTimeout(timeout);}}
+    throw last||new Error("Backend request failed.");
   }
+
 
   const Session = {
     getCustomer: () => localStorage.getItem(CUSTOMER_KEY),
@@ -182,8 +159,8 @@
         customerId=r.customer_id;sessionStorage.setItem("sarksh_registration_customer",customerId);
         unlockVerification();renderRegDocs(r.documents||[]);
         if(r.meet?.session_id){liveSessionId=r.meet.session_id;startMeetPolling();}
-        $("joinMeetKycQueue").disabled=!r.ready_for_queue || Boolean(r.meet?.session_id);
-        if(r.ready_for_queue && !r.meet?.session_id)setQueueStatus("Documents ready","Join the KYC verification queue.");
+        $("joinMeetKycQueue").disabled=!r.ready_for_queue || !r.kyc_desk?.accepting || Boolean(r.meet?.session_id);
+        if(r.ready_for_queue && !r.meet?.session_id)setQueueStatus(r.kyc_desk?.accepting?"Documents ready":"KYC desk is sleeping",r.kyc_desk?.message||(r.kyc_desk?.accepting?"Join the KYC verification queue.":"Your documents are ready; live KYC intake is paused."),r.kyc_desk?.accepting?"":"waiting");
       }catch(_){sessionStorage.removeItem("sarksh_registration_token");sessionStorage.removeItem("sarksh_registration_customer");regToken="";}
     }
     async function pollMeet(){
@@ -195,7 +172,7 @@
           setQueueStatus("KYC agent connected","Your Google Meet is ready. Join the live verification now.","live");
           $("registrationMeetLink").href=s.meet_url;$("registrationMeetLink").hidden=false;
         }else if(s.status==="WAITING_AGENT"){
-          setQueueStatus("Waiting for a KYC agent",`Queue position: ${r.queue_position||1}. Keep this page open.`,"waiting");
+          setQueueStatus(r.desk_accepting?"Waiting for a KYC agent":"KYC queue is sleeping",r.desk_accepting?`Queue position: ${r.queue_position||1}. Keep this page open.`:(r.desk_message||"Your place is preserved; agents are not accepting KYC right now."),"waiting");
         }else if(["AGENT_JOINING","MEET_PENDING"].includes(s.status)){
           setQueueStatus("Agent accepted your request","Google Meet is being prepared…","waiting");
         }else if(s.status==="COMPLETED"){
@@ -305,6 +282,7 @@
       $("welcome").textContent = `Welcome, ${r.settings?.preferred_name || r.customer.full_name}`;
       if(String(r.settings?.compact_dashboard)==="TRUE") document.body.classList.add("compact-customer");
       if(String(r.settings?.show_trade_quality)==="FALSE" && $("tradeQualityPanel")) $("tradeQualityPanel").hidden=true;
+      if($("customerNotifications")){const n=[];if(r.compliance?.agreement_required&&!r.compliance?.agreement_accepted)n.push(`<article class="portal-notice critical"><div><h3>Agreement signature required</h3><p>${esc(r.compliance.agreement_title)} · ${esc(r.compliance.agreement_version)} must be accepted before live KYC can proceed.</p></div><a class="btn primary" href="agreement.html">Review & Accept</a></article>`);if(r.customer.kyc_status!=="APPROVED"){const d=r.kyc_desk||{};n.push(`<article class="portal-notice ${d.accepting?"":"critical"}"><div><h3>${d.accepting?"Live KYC is available":"Live KYC desk is sleeping"}</h3><p>${esc(d.message||"Complete your KYC requirements from the KYC & Documents page.")}</p></div><a class="btn secondary" href="kyc.html">Open KYC</a></article>`);}if(!n.length)n.push(`<article class="portal-notice good"><div><h3>Account requirements are up to date</h3><p>No agreement or KYC action is currently pending.</p></div></article>`);$("customerNotifications").innerHTML=n.join("");}
       $("accountStatus").textContent = r.customer.account_status;
       if($("amountPlaced")) $("amountPlaced").textContent = money(r.metrics.amount_placed);
       $("currentAmount").textContent = money(r.metrics.current_amount);
@@ -441,6 +419,8 @@
     }catch(err){if(!sessionFailure(err))box.innerHTML=`<div class="alert danger">${esc(err.message)}</div>`;}
   }
 
+  async function initCustomerAgreement(){const form=$("customerAgreementForm");if(!form)return;const token=requireCustomer();if(!token)return;const load=async()=>{const r=await api("customerAgreementGet",{token}),a=r.agreement||{},c=r.compliance||{};$("customerAgreementTitle").textContent=a.title||"Current Agreement";$("customerAgreementMeta").textContent=`Version ${a.version||"—"} · SHA-256 ${a.hash||"—"}`;$("customerAgreementText").textContent=a.text||"No agreement is currently published.";$("customerAgreementPill").textContent=c.accepted?"ACCEPTED":(a.ready?"ACTION REQUIRED":"NOT ACTIVE");$("customerAgreementPill").className=`status-pill ${c.accepted?"success":(a.ready?"warning":"")}`;$("agreementAcceptedState").innerHTML=c.accepted?`<b>Accepted</b><p>Accepted as ${esc(c.accepted_name||"customer")} on ${esc(fmt(c.accepted_at))}.</p>`:`<b>${a.ready?"Signature required":"No active agreement"}</b><p>${a.ready?"Type your legal name and accept the current agreement.":"The Super Admin has not published an active agreement."}</p>`;form.hidden=c.accepted||!a.ready;};try{await load();}catch(err){if(!sessionFailure(err))setMessage($("customerAgreementMessage"),err.message,"error");}form.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(form);try{await api("customerAcceptAgreement",{token,accepted_name:f.get("accepted_name"),consent:Boolean(f.get("consent")),user_agent:navigator.userAgent});setMessage($("customerAgreementMessage"),"Agreement accepted successfully.","success");await load();}catch(err){setMessage($("customerAgreementMessage"),err.message,"error");}});}
+
   // ADMIN LOGIN: password -> email OTP -> Google Authenticator TOTP
   async function initAdminLogin() {
     const passwordForm = $("adminPasswordForm"), otpForm = $("adminOtpForm"), totpForm = $("adminTotpForm"), msg = $("message");
@@ -565,72 +545,11 @@
     } catch(err) { if(!sessionFailure(err)) alert(err.message); }
   }
 
-  async function initAdminKyc() {
-    const tbody = $("kycRows"); if (!tbody) return;
-    try {
-      const r = await adminCall("adminKycQueue");
-      let rows = r.items || [];
-      $("pendingCount").textContent = `${rows.filter(x=>x.status==="PENDING").length} pending`;
-      tbody.innerHTML = rows.map(k => `
-        <tr><td>${fmt(k.submitted_at)}</td><td>${esc(k.customer_id)} · ${esc(k.full_name)}</td>
-        <td>${esc(k.pan||"—")}</td><td>${k.video_file_id?"Uploaded":"—"}</td><td>${esc(k.status)}</td>
-        <td><button class="btn secondary" data-kyc="${esc(k.customer_id)}">Review</button></td></tr>`
-      ).join("") || '<tr><td colspan="6">No KYC submissions.</td></tr>';
-      tbody.addEventListener("click", e => {
-        const id=e.target.dataset.kyc; if(!id) return;
-        const k=rows.find(x=>x.customer_id===id);
-        $("kycDetail").innerHTML = `
-          <p class="eyebrow">KYC REVIEW</p><h2>${esc(k.full_name)} · ${esc(k.customer_id)}</h2>
-          <div class="detail-grid">${["pan","dob","address","identity_ref","status","submitted_at"].map(x =>
-            `<div class="detail-item"><small>${esc(x)}</small><b>${esc(k[x]||"—")}</b></div>`
-          ).join("")}</div>
-          ${k.video_view_url ? `<p><a class="btn secondary" target="_blank" rel="noopener" href="${esc(k.video_view_url)}">Open verification video</a></p>` : ""}
-          <label>Reviewer remarks<textarea id="kycRemarks" rows="3"></textarea></label>
-          <div class="button-row">
-            <button class="btn primary" data-review="APPROVED">Approve</button>
-            <button class="btn secondary" data-review="RESUBMIT">Request Resubmission</button>
-            <button class="btn ghost" data-review="REJECTED">Reject</button>
-          </div>`;
-        $("kycDialog").showModal();
-        $("kycDetail").onclick = async ev => {
-          const status=ev.target.dataset.review; if(!status) return;
-          try {
-            await adminCall("reviewKyc", {customer_id:id,status,remarks:$("kycRemarks").value});
-            location.reload();
-          } catch(err) { alert(err.message); }
-        };
-      });
-    } catch (err) { if (!sessionFailure(err)) alert(err.message); }
-  }
+  async function initAdminKyc(){const tbody=$("kycRows");if(!tbody)return;tbody.innerHTML='<tr class="table-loading"><td colspan="6"><div class="loading-line"></div></td></tr>';try{const r=await adminCall("adminKycQueue"),rows=r.items||[];$("pendingCount").textContent=`${rows.filter(x=>["PENDING","WAITING_AGENT","MEET_READY","LIVE"].includes(String(x.status))).length} pending`;tbody.innerHTML=rows.map(k=>`<tr><td>${fmt(k.submitted_at)}</td><td>${esc(k.customer_id)} · ${esc(k.full_name)}</td><td>${esc(k.pan_masked||"—")}</td><td>${esc(k.live_kyc_status||"Not started")}</td><td>${esc(k.status)}</td><td><button class="btn secondary" data-kyc="${esc(k.customer_id)}">Review</button></td></tr>`).join("")||'<tr><td colspan="6">No KYC records.</td></tr>';tbody.addEventListener("click",e=>{const id=e.target.dataset.kyc;if(!id)return;const k=rows.find(x=>x.customer_id===id);$("kycDetail").innerHTML=`<p class="eyebrow">KYC REVIEW</p><h2>${esc(k.full_name)} · ${esc(k.customer_id)}</h2><div class="detail-grid">${["pan_masked","aadhaar_masked","dob","address","identity_ref","status","live_kyc_status","submitted_at"].map(x=>`<div class="detail-item"><small>${esc(x.replaceAll("_"," "))}</small><b>${esc(k[x]||"—")}</b></div>`).join("")}</div><label>Reviewer remarks<textarea id="kycRemarks" rows="3"></textarea></label><div class="button-row"><button class="btn primary" data-review="APPROVED">Approve</button><button class="btn secondary" data-review="RESUBMIT">Request Resubmission</button><button class="btn ghost" data-review="REJECTED">Reject</button></div>`;$("kycDialog").showModal();$("kycDetail").onclick=async ev=>{const status=ev.target.dataset.review;if(!status)return;try{await adminCall("reviewKyc",{customer_id:id,status,remarks:$("kycRemarks").value});location.reload();}catch(err){alert(err.message);}};});}catch(err){if(!sessionFailure(err)){$("pendingCount").textContent="Error";tbody.innerHTML=`<tr class="table-error"><td colspan="6">Could not load KYC records: ${esc(err.message)} <button class="btn ghost" onclick="location.reload()">Retry</button></td></tr>`;}}}
 
-  async function initAdminTrades() {
-    const form=$("tradeForm"), tbody=$("adminTradeRows"); if(!form || !tbody) return;
-    let rows=[];
-    const refresh=async()=>{
-      const r=await adminCall("adminTrades"); rows=r.trades||[];
-      tbody.innerHTML=rows.map(t=>`<tr><td>${esc(t.trade_id)}</td><td>${esc(t.customer_id)}</td>
-      <td>${esc(t.trade_date)}</td><td><b>${esc(t.symbol)}</b></td><td>${esc(t.quantity)}</td>
-      <td class="${Number(t.net_pnl)>=0?"pnl-pos":"pnl-neg"}">${money(t.net_pnl)}</td><td>${esc(t.status)}</td></tr>`).join("")
-      ||'<tr><td colspan="7">No trades.</td></tr>';
-    };
-    try { await refresh(); } catch(err) { if(!sessionFailure(err)) alert(err.message); return; }
-    const calc=()=>{
-      const f=new FormData(form), q=+f.get("quantity")||0, en=+f.get("entry_price")||0,
-      ex=+f.get("exit_price")||0, ch=+f.get("charges")||0, type=f.get("trade_type");
-      let pnl=(type==="SELL"?(en-ex):(ex-en))*q-ch;
-      if(f.get("status")!=="CLOSED") pnl=0;
-      $("previewPnl").textContent=money(pnl);
-    };
-    form.addEventListener("input",calc);
-    form.addEventListener("submit",async e=>{
-      e.preventDefault();
-      try{
-        await adminCall("adminCreateTrade", Object.fromEntries(new FormData(form)));
-        setMessage($("message"),"Trade saved and metrics recalculated.","success");
-        form.reset(); calc(); await refresh();
-      }catch(err){setMessage($("message"),err.message,"error");}
-    });
-  }
+
+  async function initAdminTrades(){const form=$("tradeForm"),tbody=$("adminTradeRows");if(!form||!tbody)return;const refresh=async()=>{tbody.innerHTML='<tr class="table-loading"><td colspan="7"><div class="loading-line"></div></td></tr>';try{const r=await adminCall("adminTrades"),rows=r.trades||[];tbody.innerHTML=rows.map(t=>`<tr><td>${esc(t.trade_id)}</td><td>${esc(t.customer_id)}</td><td>${esc(t.trade_date)}</td><td><b>${esc(t.symbol)}</b></td><td>${esc(t.quantity)}</td><td class="${Number(t.net_pnl)>=0?"pnl-pos":"pnl-neg"}">${money(t.net_pnl)}</td><td>${esc(t.status)}</td></tr>`).join("")||'<tr><td colspan="7">No trades recorded.</td></tr>';}catch(err){if(!sessionFailure(err))tbody.innerHTML=`<tr class="table-error"><td colspan="7">Could not load trades: ${esc(err.message)} <button class="btn ghost" onclick="location.reload()">Retry</button></td></tr>`;throw err;}};try{await refresh();}catch(_){}const calc=()=>{const f=new FormData(form),q=+f.get("quantity")||0,en=+f.get("entry_price")||0,ex=+f.get("exit_price")||0,ch=+f.get("charges")||0,type=f.get("trade_type");let pnl=(type==="SELL"?(en-ex):(ex-en))*q-ch;if(f.get("status")!=="CLOSED")pnl=0;$("previewPnl").textContent=money(pnl);};form.addEventListener("input",calc);form.addEventListener("submit",async e=>{e.preventDefault();try{await adminCall("adminCreateTrade",Object.fromEntries(new FormData(form)));setMessage($("message"),"Trade saved and metrics recalculated.","success");form.reset();calc();await refresh();}catch(err){setMessage($("message"),err.message,"error");}});}
+
 
   async function initAdminMonitoring() {
     if (!$("healthCards")) return;
@@ -774,57 +693,49 @@
 
 
   async function initAdminLiveKyc() {
-    const queue=$("liveKycQueue");if(!queue)return;
-    let activeSessionId="";
+    const queue=$("liveKycQueue");if(!queue)return;let activeSessionId="",deskAccepting=false;
     const setStatus=(t,cls="")=>{$("agentCallStatus").textContent=t;$("agentCallStatus").className=`status-pill ${cls}`.trim();};
     const renderDocs=docs=>{$("agentKycDocuments").innerHTML=(docs||[]).map(d=>`<div class="document-item"><div><strong>${esc(d.document_type)}</strong><span>${esc(d.file_name||"Document")} · ${esc(d.status||"RECEIVED")}</span></div>${d.file_url?`<a class="btn ghost" href="${esc(d.file_url)}" target="_blank" rel="noopener">Open</a>`:""}</div>`).join("")||'<div class="muted">No documents uploaded.</div>';};
-    async function loadQueue(){
-      try{
-        const r=await adminCall("agentLiveKycQueue"),items=r.sessions||[];
-        $("liveQueuePill").textContent=`${items.filter(x=>x.status==="WAITING_AGENT").length} waiting`;
-        $("liveQueuePill").className=`status-pill ${items.some(x=>x.status==="WAITING_AGENT")?"warning":"success"}`;
-        queue.innerHTML=items.map(x=>`<div class="live-queue-item ${x.status==="WAITING_AGENT"?"waiting":"mine"}"><h3>${esc(x.full_name)} · ${esc(x.customer_id)}</h3><div class="live-queue-meta"><span>${esc(x.status)}</span><span>${esc(x.email)}</span><span>${esc(x.pan_masked||"")}</span><span>${esc(x.aadhaar_masked||"")}</span><span>${esc(x.wait_minutes)} min</span></div><button class="btn ${x.status==="WAITING_AGENT"?"primary":"secondary"}" data-live-session="${esc(x.session_id)}">Open KYC Workspace</button></div>`).join("")||'<div class="alert success">No customers are waiting.</div>';
-      }catch(err){if(!sessionFailure(err))queue.innerHTML=`<div class="alert danger">${esc(err.message)}</div>`;}
-    }
+    async function loadDesk(){const r=await adminCall("adminKycAvailabilityGet");deskAccepting=Boolean(r.accepting);$("kycDeskState").textContent=deskAccepting?"ACTIVE":"SLEEPING";$("kycDeskState").className=`status-pill ${deskAccepting?"active-desk":"sleeping"}`;$("kycDeskToggle").disabled=false;$("kycDeskToggle").textContent=deskAccepting?"Pause KYC Queue":"Start KYC Queue";$("kycDeskToggle").className=`btn ${deskAccepting?"ghost":"primary"}`;$("kycDeskMessage").value=r.message||"";return r;}
+    async function loadQueue(){try{const r=await adminCall("agentLiveKycQueue"),items=r.sessions||[];deskAccepting=Boolean(r.accepting);$("liveQueuePill").textContent=deskAccepting?`${items.filter(x=>x.status==="WAITING_AGENT").length} waiting`:"Sleeping";$("liveQueuePill").className=`status-pill ${deskAccepting?"warning":"sleeping"}`;queue.innerHTML=items.map(x=>`<div class="live-queue-item ${x.status==="WAITING_AGENT"?"waiting":"mine"}"><h3>${esc(x.full_name)} · ${esc(x.customer_id)}</h3><div class="live-queue-meta"><span>${esc(x.status)}</span><span>${esc(x.email)}</span><span>${esc(x.pan_masked||"")}</span><span>${esc(x.aadhaar_masked||"")}</span><span>${esc(x.wait_minutes)} min</span></div><button class="btn ${deskAccepting?"primary":"ghost"}" data-live-session="${esc(x.session_id)}" ${deskAccepting?"":"disabled"}>${deskAccepting?"Open KYC Workspace":"Queue Sleeping"}</button></div>`).join("")||`<div class="alert ${deskAccepting?"success":""}">${deskAccepting?"No customers are waiting.":"KYC intake is sleeping. Existing waiting records are preserved."}</div>`;}catch(err){if(!sessionFailure(err))queue.innerHTML=`<div class="alert danger">${esc(err.message)}</div>`;}}
+    $("kycDeskToggle")?.addEventListener("click",async()=>{try{const r=await adminCall("adminKycAvailabilitySet",{accepting:!deskAccepting,message:$("kycDeskMessage").value});deskAccepting=Boolean(r.accepting);await loadDesk();await loadQueue();setMessage($("kycDeskMessageResult"),deskAccepting?"KYC queue is active.":"KYC queue is sleeping; new requests and agent accepts are blocked.","success");}catch(err){setMessage($("kycDeskMessageResult"),err.message,"error");}});
+    $("kycDeskMessage")?.addEventListener("change",async()=>{try{await adminCall("adminKycAvailabilitySet",{accepting:deskAccepting,message:$("kycDeskMessage").value});setMessage($("kycDeskMessageResult"),"Status message saved.","success");}catch(err){setMessage($("kycDeskMessageResult"),err.message,"error");}});
+
     queue.addEventListener("click",async e=>{
-      const id=e.target.dataset.liveSession;if(!id)return;
+      const id=e.target.dataset.liveSession;if(!id||!deskAccepting)return;
       try{
         const r=await adminCall("agentAcceptLiveKyc",{session_id:id});activeSessionId=id;
         $("agentCallTitle").textContent=`${r.customer.full_name} · ${r.customer.customer_id}`;
         $("agentCustomerSummary").innerHTML=[["Email",r.customer.email],["Mobile",r.customer.mobile],["PAN",r.customer.pan_masked],["Aadhaar",r.customer.aadhaar_masked],["DOB",r.customer.dob],["Address",r.customer.address],["Agreement",r.customer.agreement_version]].map(([k,v])=>`<div class="detail-item"><small>${esc(k)}</small><b>${esc(v||"—")}</b></div>`).join("");
         renderDocs(r.documents||[]);setStatus(r.meet_url?"Meet ready":"Customer selected",r.meet_url?"success":"warning");
-        $("createAgentMeet").disabled=Boolean(r.meet_url);
+        $("agentMeetUrl").value=r.meet_url||"";
+        $("publishAgentMeet").disabled=!deskAccepting;
         if(r.meet_url){$("joinAgentMeet").href=r.meet_url;$("joinAgentMeet").hidden=false;["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=false);}
         else{$("joinAgentMeet").hidden=true;["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=true);}
         await loadQueue();
       }catch(err){setMessage($("agentLiveMessage"),err.message,"error");}
     });
-    $("createAgentMeet")?.addEventListener("click",async()=>{
-      if(!activeSessionId)return;
+
+    $("publishAgentMeet")?.addEventListener("click",async()=>{
+      if(!activeSessionId||!deskAccepting)return;
+      const meetUrl=String($("agentMeetUrl").value||"").trim();
       try{
-        setMessage($("agentLiveMessage"),"Creating Google Meet and sending Calendar invitations…");
-        const r=await adminCall("agentCreateMeetKyc",{session_id:activeSessionId});
-        $("joinAgentMeet").href=r.meet_url;$("joinAgentMeet").hidden=false;$("createAgentMeet").disabled=true;
-        ["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=false);setStatus("Meet ready","success");
-        setMessage($("agentLiveMessage"),"Google Meet created. Customer and agent invitations were sent.","success");
+        setMessage($("agentLiveMessage"),"Publishing Google Meet link to customer…");
+        const r=await adminCall("agentPublishMeetKyc",{session_id:activeSessionId,meet_url:meetUrl});
+        $("joinAgentMeet").href=r.meet_url;$("joinAgentMeet").hidden=false;
+        ["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=false);
+        setStatus("Meet ready","success");
+        setMessage($("agentLiveMessage"),"Meet link published. The customer portal is now showing the same link.","success");
       }catch(err){setMessage($("agentLiveMessage"),err.message,"error");}
     });
-    async function finish(result){
-      if(!activeSessionId)return;const remarks=$("liveKycRemarks").value||"";
-      if(result!=="VERIFIED"&&!remarks)return setMessage($("agentLiveMessage"),"Enter remarks before re-verification or rejection.","error");
-      try{
-        await adminCall("agentCompleteLiveKyc",{session_id:activeSessionId,result,remarks});
-        setMessage($("agentLiveMessage"),result==="VERIFIED"?"Customer verified and activated.":`KYC result: ${result}.`,result==="VERIFIED"?"success":"error");
-        activeSessionId="";$("liveKycRemarks").value="";$("joinAgentMeet").hidden=true;$("createAgentMeet").disabled=true;
-        ["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=true);setStatus("Completed","success");await loadQueue();
-      }catch(err){setMessage($("agentLiveMessage"),err.message,"error");}
-    }
-    $("markVerified")?.addEventListener("click",()=>finish("VERIFIED"));
-    $("markResubmit")?.addEventListener("click",()=>finish("RESUBMIT"));
-    $("markRejected")?.addEventListener("click",()=>finish("REJECTED"));
-    $("refreshLiveQueue")?.addEventListener("click",loadQueue);
-    await loadQueue();setInterval(loadQueue,5000);
+
+    async function finish(result){if(!activeSessionId)return;const remarks=$("liveKycRemarks").value||"";if(result!=="VERIFIED"&&!remarks)return setMessage($("agentLiveMessage"),"Enter remarks first.","error");try{await adminCall("agentCompleteLiveKyc",{session_id:activeSessionId,result,remarks});setMessage($("agentLiveMessage"),result==="VERIFIED"?"Customer verified and activated.":`KYC result: ${result}.`,result==="VERIFIED"?"success":"error");activeSessionId="";$("liveKycRemarks").value="";$("joinAgentMeet").hidden=true;$("agentMeetUrl").value="";$("publishAgentMeet").disabled=true;["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=true);setStatus("Completed","success");await loadQueue();}catch(err){setMessage($("agentLiveMessage"),err.message,"error");}}
+    $("markVerified")?.addEventListener("click",()=>finish("VERIFIED"));$("markResubmit")?.addEventListener("click",()=>finish("RESUBMIT"));$("markRejected")?.addEventListener("click",()=>finish("REJECTED"));$("refreshLiveQueue")?.addEventListener("click",loadQueue);
+    try{await loadDesk();await loadQueue();}catch(err){setMessage($("kycDeskMessageResult"),err.message,"error");}
+    setInterval(loadQueue,10000);
   }
+
+
 
 
 
@@ -861,6 +772,7 @@
     await initAdminLiveKyc();
     await initCustomerSettings();
     await initCustomerTeam();
+    await initCustomerAgreement();
     initAdminCustomerTeamAssignment();
   }
 

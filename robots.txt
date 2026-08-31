@@ -1,3 +1,6 @@
 User-agent: *
 Disallow: /admin/
 Disallow: /kyc.html
+Disallow: /agreement.html
+Disallow: /settings.html
+Disallow: /team.html

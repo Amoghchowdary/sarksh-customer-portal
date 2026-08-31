@@ -6,7 +6,7 @@
 <nav><a href="dashboard.html">Dashboard</a><a href="customers.html">Customers</a><a class="active" href="kyc-live.html">Google Meet KYC</a><a href="kyc.html">KYC Records</a><a href="trades.html">Trade Management</a><a href="accounts.html">Accounts & Ledger</a><a href="monitoring.html">Monitoring</a><a href="reports.html">Reports</a><a href="agreements.html">Agreement</a><a href="admins.html">Admins</a><a href="audit.html">Audit Logs</a></nav>
 <div class="side-bottom"><button class="btn ghost full" data-logout>Sign Out</button></div></aside>
 <main class="main">
-<header class="topbar"><button class="menu-btn" data-menu>☰</button><div><p class="eyebrow">KYC OPERATIONS</p><h1>Google Meet Verification Desk</h1></div><span id="liveQueuePill" class="status-pill">Loading queue</span></header>
+<header class="topbar"><button class="menu-btn" data-menu>☰</button><div><p class="eyebrow">KYC OPERATIONS</p><h1>Google Meet Verification Desk</h1></div><span id="liveQueuePill" class="status-pill">Loading queue</span></header><section class="panel kyc-desk-control"><div class="panel-head"><div><p class="eyebrow">KYC DESK AVAILABILITY</p><h2>Live verification intake</h2><p class="muted">Sleeping mode preserves waiting customers but blocks new KYC requests and agent acceptance.</p></div><div class="kyc-toggle-wrap"><span id="kycDeskState" class="status-pill">Checking</span><button id="kycDeskToggle" class="btn primary" type="button" disabled>Loading…</button></div></div><label>Customer-facing status message<input id="kycDeskMessage" maxlength="180" placeholder="Live KYC is available now."/></label><div id="kycDeskMessageResult" class="form-message"></div></section>
 <section class="content-grid live-kyc-layout">
 <article class="panel"><div class="panel-head"><div><p class="eyebrow">WAITING ROOM</p><h2>Customers waiting</h2></div><button id="refreshLiveQueue" class="btn ghost">Refresh</button></div><div id="liveKycQueue" class="live-queue"><div class="alert">Loading waiting customers…</div></div></article>
 
@@ -16,12 +16,22 @@
 <div class="section-rule"></div><h3>KYC documents</h3><div id="agentKycDocuments" class="document-list"><div class="muted">Select a customer to review documents.</div></div>
 <div class="section-rule"></div>
 <div class="meet-workspace">
-<div><p class="eyebrow">GOOGLE MEET</p><h3>Live verification call</h3><p class="muted">Create the Meet only after reviewing the customer's KYC submission. The customer and agent are invited through Google Calendar.</p></div>
-<div class="button-row"><button id="createAgentMeet" class="btn primary" type="button" disabled>Create Google Meet & Invite</button><a id="joinAgentMeet" class="btn secondary" href="#" target="_blank" rel="noopener" hidden>Join Google Meet</a></div>
+<div>
+  <p class="eyebrow">GOOGLE MEET</p>
+  <h3>Live verification call</h3>
+  <p class="muted">Create a Google Meet manually in your authorised Google account, paste the meeting URL below, and publish it to this customer. No Calendar/Meet API is called by the portal.</p>
+</div>
+<label>Google Meet URL
+  <input id="agentMeetUrl" type="url" placeholder="https://meet.google.com/abc-defg-hij" />
+</label>
+<div class="button-row">
+  <button id="publishAgentMeet" class="btn primary" type="button" disabled>Publish Meet Link</button>
+  <a id="joinAgentMeet" class="btn secondary" href="#" target="_blank" rel="noopener" hidden>Join Google Meet</a>
+</div>
 </div>
 <div class="section-rule"></div>
 <label>Verification remarks<textarea id="liveKycRemarks" rows="4" placeholder="Document checks and live verification observations"></textarea></label>
 <div class="button-row verification-actions"><button id="markVerified" class="btn primary" type="button" disabled>Verify & Activate</button><button id="markResubmit" class="btn secondary" type="button" disabled>Request Re-verification</button><button id="markRejected" class="btn ghost" type="button" disabled>Reject</button></div>
 <div id="agentLiveMessage" class="form-message"></div>
 </article></section>
-</main></div><script src="../js/app.js?v=6.0.0"></script></body></html>
+</main></div><script src="../js/app.js?v=8.0.0"></script></body></html>

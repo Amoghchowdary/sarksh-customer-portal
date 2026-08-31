@@ -1,96 +1,99 @@
-# SARKSH Customer + Admin Portal V6
+# SARKSH Portal V8 — No External API / Internal Keyed-Hash Vault
 
-## V6 focus
+## Core rule
 
-V6 upgrades both customer experience and KYC operations.
+V8 removes the Google Cloud KMS REST dependency and removes automatic Google Calendar/Meet API creation.
 
-Customer portal now includes:
-- Overview
-- Trades
-- KYC & Document Center
-- My SARKSH Team
-- Account Settings
-- Password change
-- Dashboard preferences
-- Notification preferences
+The application continues to use only the chosen native Apps Script services:
+- SpreadsheetApp
+- DriveApp
+- PropertiesService
+- Utilities
+- MailApp
 
-KYC now includes:
-- PAN
-- DOB/address
-- Aadhaar number OR Aadhaar document
-- Private KYC document upload to Google Drive
-- PAN/Aadhaar/address-proof document types
-- Google Meet live agent verification
+There is no `UrlFetchApp` call in the backend and no Advanced Google service in `appsscript.json`.
 
-## Aadhaar handling
+## Important terminology
 
-The frontend accepts a 12-digit Aadhaar number when the customer chooses that route.
+Hashing is not encryption and is not a conventional KMS.
 
-The backend does **not** return the full number after submission. It stores:
-- masked reference, e.g. `XXXX-XXXX-1234`
-- keyed HMAC verification value
-- mode (`NUMBER`)
+For Aadhaar, V8 uses a **one-way keyed HMAC-SHA256 vault** because the portal does not need to recover the original Aadhaar number after KYC submission.
 
-The pepper is stored in Apps Script Script Properties, not GitHub.
+Stored values:
+- `aadhaar_masked` → XXXX-XXXX-1234
+- `aadhaar_hmac` → keyed HMAC-SHA256
+- `aadhaar_hash_key_version`
+- `aadhaar_hash_scheme` → HMAC-SHA256
 
-Alternatively, the customer can upload the Aadhaar/identity document to the private KYC Drive vault.
+The full Aadhaar number is never written to Google Sheets.
 
-## Google Meet KYC
+If the original number is needed again, the customer must re-enter it or use the uploaded Aadhaar document.
 
-Agent page:
+## Internal key vault
 
-`/admin/kyc-live.html`
+Secrets are generated and stored in Apps Script Script Properties.
 
-Workflow:
+Initialization happens automatically through migration/setup.
 
-Customer joins KYC queue
--> Agent opens workspace and reviews uploaded documents
--> Agent clicks `Create Google Meet & Invite`
--> Apps Script creates a Google Calendar event + Google Meet conference
--> Customer and agent receive Calendar invitations
--> Meet link appears in both portals
--> Agent completes KYC as VERIFIED / RESUBMIT / REJECTED
+Status:
+`internalHashVaultStatus()`
 
-V6 uses Google Calendar API conferenceData with `conferenceDataVersion=1`.
+Rotate active key:
+`rotateSarkshInternalHashKey()`
 
-## Existing customer database preservation
+Rotation preserves previous key versions for historical verification. Existing Aadhaar values cannot be re-hashed under a new key without asking the customer for the original value again.
 
-Use the SAME Apps Script project and SAME Script Properties.
+## KYC document integrity
+
+Private KYC files remain in Google Drive.
+
+V8 stores:
+- SHA-256 fingerprint
+- HMAC-SHA256 integrity tag
+- integrity key version
+- integrity scheme
+
+This detects document tampering/reference mismatch.
+
+Hashing does **not** encrypt the document contents. Drive access controls and Google-managed storage encryption remain the confidentiality layer for the file vault.
+
+## Google Meet without API dependency
+
+The KYC agent manually creates a Google Meet in the authorised Google account.
+
+Admin workflow:
+1. Open `/admin/kyc-live.html`
+2. Accept customer
+3. Review KYC documents
+4. Create a Google Meet manually
+5. Paste `https://meet.google.com/...`
+6. Click `Publish Meet Link`
+7. Customer sees the link in the portal
+8. MailApp sends the same link to the customer
+9. Agent verifies / requests re-verification / rejects
+
+No Calendar API or Meet API is invoked by the portal.
+
+## Existing database
+
+Use the same Apps Script project and production database.
 
 Run:
+`migrateExistingDatabaseToV8()`
 
-`migrateExistingDatabaseToV6()`
+The migration makes a PRE-V8 backup and only adds missing schema/metadata fields.
 
-The function creates a timestamped Drive backup, then only adds missing V6 columns/tabs.
+## Existing backend URL
 
-Existing customers, trades, ledger, KYC and admin records remain in the same production Sheet.
-
-New tables:
-- `21_CUSTOMER_TEAM`
-- `22_CUSTOMER_SETTINGS`
-
-Existing tables are extended additively:
-- `06_KYC`
-- `07_KYC_DOCUMENTS`
-- `19_KYC_LIVE_SESSIONS`
-
-## Calendar service
-
-V6 `appsscript.json` enables Google Calendar API v3 and adds the calendar.events OAuth scope.
-
-If Apps Script shows `Calendar is not defined`, open Apps Script -> Services (+) -> add **Google Calendar API v3**, authorize it, and redeploy the existing Web App version.
+https://script.google.com/macros/s/AKfycbzvnPVHqRKhJZO8Qd3vtyF0K5_rYYwYTDWXCBZAZZFAZjqgTsBnx1dux6d2KM0PjYGkNA/exec
 
 ## Deployment
 
-Keep the existing Apps Script `/exec` URL.
-
-1. Paste V6 `Code.gs`
+1. Replace `Code.gs`
 2. Replace `appsscript.json`
-3. Run `migrateExistingDatabaseToV6()`
-4. Authorize new Calendar permission
-5. Update the EXISTING Apps Script deployment to a new version
-6. Push frontend to `main`
-7. GitHub Actions builds/deploys Pages
-
-Backend already configured:
-https://script.google.com/macros/s/AKfycbzvnPVHqRKhJZO8Qd3vtyF0K5_rYYwYTDWXCBZAZZFAZjqgTsBnx1dux6d2KM0PjYGkNA/exec
+3. Run `migrateExistingDatabaseToV8()`
+4. Run `internalHashVaultStatus()`
+5. Update the EXISTING Apps Script Web App deployment
+6. Keep the same `/exec` URL
+7. Push frontend to `main`
+8. GitHub Actions deploys Pages

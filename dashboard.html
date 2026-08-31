@@ -13,7 +13,7 @@
   <div class="app-shell">
     <aside class="sidebar">
       <a class="side-brand" href="dashboard.html"><img src="assets/logo/sarksh-logo-web.png" alt="SARKSH" /><span>SARKSH</span></a>
-      <nav><a class="active" href="dashboard.html">Overview</a><a href="trades.html">Trades</a><a href="kyc.html">KYC & Documents</a><a href="team.html">My Team</a><a href="settings.html">Account Settings</a></nav>
+      <nav><a class="active" href="dashboard.html">Overview</a><a href="trades.html">Trades</a><a href="kyc.html">KYC & Documents</a><a href="agreement.html">Agreement</a><a href="team.html">My Team</a><a href="settings.html">Account Settings</a></nav>
       <div class="side-bottom">
         <button class="btn ghost full" data-logout>Sign Out</button>
       </div>
@@ -23,7 +23,7 @@
         <button class="menu-btn" data-menu>☰</button>
         <div><p class="eyebrow">CUSTOMER PORTAL</p><h1 id="welcome">Account Overview</h1></div>
         <div class="top-statuses"><span id="kycStatus" class="status-pill">KYC Loading</span><span id="accountStatus" class="status-pill">Loading</span></div>
-      </header>
+      </header><section id="customerNotifications" class="notification-stack" aria-live="polite"></section>
 
       <section class="kpi-grid">
         <article class="kpi-card hero"><span>Amount Placed</span><strong id="amountPlaced">—</strong><small>Principal recorded to this account</small></article>
@@ -51,5 +51,5 @@
     </main>
   </div>
   
-  <script src="js/app.js?v=6.0.0"></script>
+  <script src="js/app.js?v=8.0.0"></script>
 </body></html>

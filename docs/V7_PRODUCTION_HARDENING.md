@@ -1,0 +1,1 @@
+V7 adds finite loading states, request-scoped performance optimization, current-agreement parity for existing/new customers, hidden public admin discovery, KYC desk ACTIVE/SLEEPING control, customer reminders, and KMS support for Aadhaar numbers.
