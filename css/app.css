@@ -95,3 +95,22 @@ dialog{border:0;border-radius:18px;padding:28px;box-shadow:var(--shadow);width:m
 .agent-grid .video-box{min-height:300px}
 .verification-actions{margin:14px 0}
 @media(max-width:980px){.live-video-grid,.live-kyc-layout{grid-template-columns:1fr}.agent-grid .video-box{min-height:220px}}
+
+/* V6 customer experience + document vault + Google Meet KYC */
+.field-help{font-size:12px;color:var(--muted);margin:-8px 0 4px;line-height:1.45}
+.required-text{font-size:10px;text-transform:uppercase;color:#b42318;font-weight:850;letter-spacing:.06em}
+.document-upload-grid{display:grid;grid-template-columns:minmax(260px,.7fr) minmax(0,1.3fr);gap:22px}
+.document-list{display:flex;flex-direction:column;gap:9px}
+.document-item{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:12px;padding:12px;background:#f9fbfa}
+.document-item strong,.document-item span{display:block}.document-item span{font-size:12px;color:var(--muted);margin-top:3px}
+.team-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.team-card{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff}
+.team-card .avatar{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:#e7f1ec;color:var(--green);font-weight:900;margin-bottom:12px}
+.team-card h3{margin:0 0 5px;font-size:16px}.team-card p{margin:3px 0;color:var(--muted);font-size:13px}
+.compact-team{grid-template-columns:1fr}
+.meet-status-box,.meet-workspace{border:1px solid var(--line);background:#f8faf9;border-radius:14px;padding:16px;margin:10px 0}
+.meet-status-box.ready{border-color:#9dcdb6;background:#eff8f3}
+.meet-status-box.waiting{border-color:#e6c98e;background:#fff9ee}
+body.compact-customer .main{padding-top:20px}
+body.compact-customer .panel,body.compact-customer .kpi-card{padding:16px}
+@media(max-width:900px){.document-upload-grid{grid-template-columns:1fr}}

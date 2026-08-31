@@ -1,12 +1,21 @@
 {
   "timeZone": "Asia/Kolkata",
-  "dependencies": {},
+  "dependencies": {
+    "enabledAdvancedServices": [
+      {
+        "userSymbol": "Calendar",
+        "version": "v3",
+        "serviceId": "calendar"
+      }
+    ]
+  },
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
   "oauthScopes": [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/script.send_mail"
+    "https://www.googleapis.com/auth/script.send_mail",
+    "https://www.googleapis.com/auth/calendar.events"
   ],
   "webapp": {
     "executeAs": "USER_DEPLOYING",

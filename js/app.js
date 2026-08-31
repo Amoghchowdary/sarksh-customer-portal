@@ -11,7 +11,7 @@
     BACKEND_URL: "https://script.google.com/macros/s/AKfycbzvnPVHqRKhJZO8Qd3vtyF0K5_rYYwYTDWXCBZAZZFAZjqgTsBnx1dux6d2KM0PjYGkNA/exec",
     APP_NAME: "SARKSH Portal",
     VIDEO_MAX_MB: 3,
-    BUILD: "5.0.0"
+    BUILD: "6.0.0"
   };
 
 
@@ -116,6 +116,18 @@
     });
   });
 
+
+  async function filePayload(file) {
+    if(!file) throw new Error("Select a document.");
+    const allowed=["application/pdf","image/jpeg","image/png"];
+    if(!allowed.includes(file.type)) throw new Error("Only PDF, JPG and PNG documents are supported.");
+    if(file.size>2*1024*1024) throw new Error("Each KYC document must be 2 MB or smaller.");
+    const data=await new Promise((resolve,reject)=>{
+      const r=new FileReader();r.onload=()=>resolve(String(r.result||""));r.onerror=reject;r.readAsDataURL(file);
+    });
+    return {file_name:file.name,mime_type:file.type,file_base64:data.split(",")[1]||""};
+  }
+
   // CUSTOMER LOGIN
   async function initCustomerLogin() {
     const form = $("loginForm"), msg = $("message");
@@ -142,226 +154,125 @@
 
   // REGISTRATION
   async function initRegistration() {
-    const form = $("registerForm"), msg = $("message");
-    if (!form) return;
+    const form=$("registerForm"),msg=$("message");
+    if(!form)return;
+    let agreement=null;
+    let regToken=sessionStorage.getItem("sarksh_registration_token")||"";
+    let customerId=sessionStorage.getItem("sarksh_registration_customer")||"";
+    let liveSessionId="";
+    let pollTimer=null;
 
-    let registrationToken = "";
-    let agreement = null;
-    let localStream = null;
-    let peer = null;
-    let liveSessionId = "";
-    let statusTimer = null;
-    let signalTimer = null;
-    let lastSignalSeq = 0;
-    let customerOfferSent = false;
-    let pendingIce = [];
-
-    const statusCard = $("liveKycStatus");
-    const setLiveStatus = (title, subtitle, cls="") => {
-      if(!statusCard) return;
-      statusCard.className = `waiting-card ${cls}`.trim();
-      statusCard.innerHTML = `<div class="waiting-dot"></div><div><b>${esc(title)}</b><span>${esc(subtitle||"")}</span></div>`;
+    const setQueueStatus=(title,subtitle,cls="")=>{
+      const box=$("liveKycStatus");if(!box)return;
+      box.className=`waiting-card ${cls}`.trim();
+      box.innerHTML=`<div class="waiting-dot"></div><div><b>${esc(title)}</b><span>${esc(subtitle||"")}</span></div>`;
     };
-
-    const stopTimers = () => {
-      if(statusTimer) clearInterval(statusTimer);
-      if(signalTimer) clearInterval(signalTimer);
-      statusTimer = signalTimer = null;
+    const unlockVerification=()=>{
+      $("registrationLocked").hidden=true;
+      $("registrationVerificationArea").hidden=false;
+      $("registrationCustomerRef").textContent=`Customer reference: ${customerId}`;
     };
-    const closeMedia = () => {
-      stopTimers();
-      try{peer?.close();}catch(_){}
-      peer = null;
-      localStream?.getTracks().forEach(t=>t.stop());
-      localStream = null;
-      if($("customerLocalVideo")) $("customerLocalVideo").srcObject = null;
-      if($("customerRemoteVideo")) $("customerRemoteVideo").srcObject = null;
-      $("leaveLiveKyc").disabled = true;
+    const renderRegDocs=(docs=[])=>{
+      $("registrationDocStatus").innerHTML=docs.map(d=>`<div class="document-item"><div><strong>${esc(d.document_type)}</strong><span>${esc(d.file_name||"Uploaded")} · ${esc(d.status||"RECEIVED")}</span></div><span class="status-pill success">Stored</span></div>`).join("");
     };
-
-    async function sendCustomerSignal(type,payload) {
-      return api("liveKycSignalSend",{
-        registration_token:registrationToken,
-        session_id:liveSessionId,
-        participant:"CUSTOMER",
-        type,
-        payload_json:JSON.stringify(payload)
-      });
-    }
-
-    async function flushCustomerIce() {
-      if(!peer?.remoteDescription) return;
-      const items=[...pendingIce]; pendingIce=[];
-      for(const c of items){try{await peer.addIceCandidate(c);}catch(_){}}
-    }
-
-    async function startCustomerPeer() {
-      if(customerOfferSent || !localStream || !liveSessionId) return;
-      customerOfferSent = true;
-      peer = new RTCPeerConnection(RTC_CONFIG);
-      localStream.getTracks().forEach(t=>peer.addTrack(t,localStream));
-      peer.ontrack = ev => {
-        const stream=ev.streams?.[0];
-        if(stream) $("customerRemoteVideo").srcObject=stream;
-      };
-      peer.onicecandidate = ev => {
-        if(ev.candidate) sendCustomerSignal("ICE",ev.candidate.toJSON ? ev.candidate.toJSON() : ev.candidate).catch(()=>{});
-      };
-      peer.onconnectionstatechange = () => {
-        const s=peer.connectionState;
-        if(s==="connected") {
-          setLiveStatus("Live with verification agent","The agent can now complete your verification.","live");
-          setMessage($("videoMessage"),"Secure peer-to-peer live connection established.","success");
-        } else if(["failed","disconnected"].includes(s)) {
-          setLiveStatus("Connection interrupted","Keep this page open while the call reconnects.","waiting");
-        }
-      };
-      const offer=await peer.createOffer({offerToReceiveAudio:true,offerToReceiveVideo:true});
-      await peer.setLocalDescription(offer);
-      await sendCustomerSignal("OFFER",{type:offer.type,sdp:offer.sdp});
-    }
-
-    async function pollCustomerSignals() {
-      if(!liveSessionId) return;
+    async function refreshResume(){
+      if(!regToken)return;
       try{
-        const r=await api("liveKycSignalPoll",{
-          registration_token:registrationToken,
-          session_id:liveSessionId,
-          participant:"CUSTOMER",
-          after_seq:lastSignalSeq
-        });
-        for(const s of (r.signals||[])){
-          lastSignalSeq=Math.max(lastSignalSeq,Number(s.seq||0));
-          const payload=JSON.parse(s.payload_json||"{}");
-          if(s.type==="ANSWER" && peer && !peer.remoteDescription){
-            await peer.setRemoteDescription(payload);
-            await flushCustomerIce();
-          } else if(s.type==="ICE"){
-            const cand=new RTCIceCandidate(payload);
-            if(peer?.remoteDescription) { try{await peer.addIceCandidate(cand);}catch(_){} }
-            else pendingIce.push(cand);
-          }
-        }
-      }catch(err){
-        console.warn("KYC signal poll:",err.message);
-      }
+        const r=await api("registrationResumeStatus",{registration_token:regToken});
+        customerId=r.customer_id;sessionStorage.setItem("sarksh_registration_customer",customerId);
+        unlockVerification();renderRegDocs(r.documents||[]);
+        if(r.meet?.session_id){liveSessionId=r.meet.session_id;startMeetPolling();}
+        $("joinMeetKycQueue").disabled=!r.ready_for_queue || Boolean(r.meet?.session_id);
+        if(r.ready_for_queue && !r.meet?.session_id)setQueueStatus("Documents ready","Join the KYC verification queue.");
+      }catch(_){sessionStorage.removeItem("sarksh_registration_token");sessionStorage.removeItem("sarksh_registration_customer");regToken="";}
     }
-
-    async function pollLiveStatus() {
-      if(!liveSessionId) return;
+    async function pollMeet(){
+      if(!regToken||!liveSessionId)return;
       try{
-        const r=await api("liveKycStatus",{registration_token:registrationToken,session_id:liveSessionId});
+        const r=await api("liveKycStatus",{registration_token:regToken,session_id:liveSessionId});
         const s=r.session;
-        if(s.status==="WAITING_AGENT"){
-          setLiveStatus("Waiting for a SARKSH verification agent",`Queue position: ${r.queue_position || 1}. Keep this page open.`,"waiting");
-        } else if(s.status==="AGENT_JOINING"){
-          setLiveStatus("Agent accepted your verification","Connecting the secure live call…","waiting");
-          await startCustomerPeer();
-        } else if(s.status==="LIVE"){
-          setLiveStatus("Live verification in progress","Stay on camera until the agent completes the verification.","live");
-          await startCustomerPeer();
-        } else if(s.status==="COMPLETED"){
-          stopTimers();
-          const result=String(s.result||"");
-          if(result==="VERIFIED"){
-            setLiveStatus("Verification approved","Your account is now active.","live");
-            setMessage($("videoMessage"),"Live KYC verified. Redirecting to login…","success");
-            setTimeout(()=>location.href="login.html",1800);
-          } else if(result==="RESUBMIT"){
-            setLiveStatus("Re-verification requested","The agent requested another live verification session.","waiting");
-            setMessage($("videoMessage"),s.remarks||"Please rejoin the verification queue.","error");
-            $("joinLiveKyc").textContent="Rejoin Verification Queue";
-            $("joinLiveKyc").disabled=false;
-            liveSessionId="";
-            customerOfferSent=false;
-            try{peer?.close();}catch(_){}
-            peer=null;
-          } else {
-            setLiveStatus("Verification not approved",s.remarks||"Please contact SARKSH support.","failed");
-            setMessage($("videoMessage"),s.remarks||"Verification was not approved.","error");
+        if(s.meet_url){
+          setQueueStatus("KYC agent connected","Your Google Meet is ready. Join the live verification now.","live");
+          $("registrationMeetLink").href=s.meet_url;$("registrationMeetLink").hidden=false;
+        }else if(s.status==="WAITING_AGENT"){
+          setQueueStatus("Waiting for a KYC agent",`Queue position: ${r.queue_position||1}. Keep this page open.`,"waiting");
+        }else if(["AGENT_JOINING","MEET_PENDING"].includes(s.status)){
+          setQueueStatus("Agent accepted your request","Google Meet is being prepared…","waiting");
+        }else if(s.status==="COMPLETED"){
+          clearInterval(pollTimer);pollTimer=null;
+          if(s.result==="VERIFIED"){
+            setQueueStatus("KYC verified","Your account has been activated.","live");
+            setTimeout(()=>{sessionStorage.removeItem("sarksh_registration_token");sessionStorage.removeItem("sarksh_registration_customer");location.href="login.html";},1800);
+          }else{
+            setQueueStatus("Verification requires attention",s.remarks||s.result,"failed");
+            if(s.result==="RESUBMIT")$("joinMeetKycQueue").disabled=false;
           }
         }
-      }catch(err){
-        if(/expired/i.test(err.message)){
-          closeMedia();
-          setLiveStatus("Verification session expired","Restart registration to continue.","failed");
-        }
-      }
+      }catch(err){console.warn(err.message);}
     }
+    function startMeetPolling(){if(pollTimer)clearInterval(pollTimer);pollMeet();pollTimer=setInterval(pollMeet,3000);}
 
-    try {
-      api("getRegistrationAgreement").then(r=>{
-        agreement=r.agreement;
-        $("agreementVersion").value=agreement.version||"";
-        $("agreementHash").value=agreement.hash||"";
-        $("agreementBox").textContent=agreement.text||"Agreement is not configured.";
-        $("agreementState").innerHTML=`<b>${esc(agreement.title||"Registration Agreement")} · ${esc(agreement.version||"")}</b>
-          <p>${agreement.ready?"Read the complete agreement below before accepting.":"The agreement is not active yet. Registration is disabled until the Super Admin publishes it."}</p>`;
-        if(!agreement.ready)$("agreementBox").classList.add("not-ready");
-        $("beginRegistration").disabled=!agreement.ready;
-      }).catch(err=>{
-        $("agreementBox").textContent="Unable to load the agreement.";
-        $("agreementBox").classList.add("not-ready");
-        setMessage(msg,err.message,"error");
-      });
-    } catch(_) {}
+    api("getRegistrationAgreement").then(r=>{
+      agreement=r.agreement;$("agreementVersion").value=agreement.version||"";$("agreementHash").value=agreement.hash||"";
+      $("agreementBox").textContent=agreement.text||"Agreement is not configured.";
+      $("agreementState").innerHTML=`<b>${esc(agreement.title||"Registration Agreement")} · ${esc(agreement.version||"")}</b><p>${agreement.ready?"Read the full agreement before acceptance.":"Registration is disabled until the Super Admin publishes the agreement."}</p>`;
+      $("beginRegistration").disabled=!agreement.ready;
+    }).catch(err=>setMessage(msg,err.message,"error"));
+
+    refreshResume();
 
     form.addEventListener("submit",async e=>{
-      e.preventDefault();
-      if(!agreement?.ready)return setMessage(msg,"Registration agreement is not active yet.","error");
-      const f=new FormData(form);
+      e.preventDefault();const f=new FormData(form);
+      if(!agreement?.ready)return setMessage(msg,"Registration agreement is not active.","error");
       if(f.get("password")!==f.get("confirm_password"))return setMessage(msg,"Passwords do not match.","error");
       if(String(f.get("accepted_name")||"").trim().toLowerCase()!==String(f.get("full_name")||"").trim().toLowerCase())
         return setMessage(msg,"The typed agreement name must match the full legal name.","error");
-
-      setMessage(msg,"Securing account, KYC and agreement acceptance…");
       try{
+        setMessage(msg,"Creating secure registration and KYC record…");
         const r=await api("registerCustomer",{
-          full_name:f.get("full_name"),mobile:f.get("mobile"),email:f.get("email"),
-          password:f.get("password"),pan:String(f.get("pan")||"").toUpperCase(),
-          dob:f.get("dob"),address:f.get("address"),identity_ref:f.get("identity_ref"),
+          full_name:f.get("full_name"),mobile:f.get("mobile"),email:f.get("email"),password:f.get("password"),
+          pan:String(f.get("pan")||"").toUpperCase(),dob:f.get("dob"),address:f.get("address"),
+          aadhaar_number:String(f.get("aadhaar_number")||""),identity_ref:f.get("identity_ref"),
           agreement_hash:f.get("agreement_hash"),agreement_version:f.get("agreement_version"),
-          accepted_name:f.get("accepted_name"),agreement_consent:Boolean(f.get("agreement_consent")),
-          user_agent:navigator.userAgent
+          accepted_name:f.get("accepted_name"),agreement_consent:Boolean(f.get("agreement_consent")),user_agent:navigator.userAgent
         });
-        registrationToken=r.registration_token;
+        regToken=r.registration_token;customerId=r.customer_id;
+        sessionStorage.setItem("sarksh_registration_token",regToken);sessionStorage.setItem("sarksh_registration_customer",customerId);
         form.querySelectorAll("input,textarea,button").forEach(el=>el.disabled=true);
-        $("liveKycPanel").classList.add("unlocked");
-        $("joinLiveKyc").disabled=false;
-        setLiveStatus("Ready for live verification","Start your camera and join the verification queue.");
-        setMessage(msg,`Registration secured. Customer reference: ${r.customer_id}. Complete live agent verification to activate the account.`,"success");
+        unlockVerification();
+        setMessage(msg,`Registration created. Customer reference: ${customerId}. Upload KYC documents to continue.`,"success");
       }catch(err){setMessage(msg,err.message,"error");}
     });
 
-    $("joinLiveKyc")?.addEventListener("click",async()=>{
-      if(!registrationToken)return;
+    $("registrationDocumentsForm")?.addEventListener("submit",async e=>{
+      e.preventDefault();if(!regToken)return;
+      const f=new FormData(e.currentTarget),pan=f.get("pan_document"),aad=f.get("aadhaar_document"),addr=f.get("address_document");
       try{
-        if(!localStream){
-          localStream=await navigator.mediaDevices.getUserMedia({
-            video:{width:{ideal:640},height:{ideal:480},frameRate:{ideal:15,max:24}},
-            audio:{echoCancellation:true,noiseSuppression:true}
-          });
-          $("customerLocalVideo").srcObject=localStream;
+        setMessage($("registrationDocsMessage"),"Uploading documents securely…");
+        const uploads=[["PAN_CARD",pan],["AADHAAR",aad],["ADDRESS_PROOF",addr]].filter(([,file])=>file&&file.size);
+        for(const [type,file] of uploads){
+          const fp=await filePayload(file);
+          await api("uploadRegistrationDocument",{registration_token:regToken,document_type:type,...fp});
         }
-        const r=await api("createLiveKycSession",{registration_token:registrationToken});
-        liveSessionId=r.session_id;
-        lastSignalSeq=0;customerOfferSent=false;pendingIce=[];
-        $("joinLiveKyc").disabled=true;
-        $("leaveLiveKyc").disabled=false;
-        setLiveStatus("Waiting for a SARKSH verification agent","Keep this tab open. An authorised agent will connect shortly.","waiting");
-        await pollLiveStatus();
-        statusTimer=setInterval(pollLiveStatus,3000);
-        signalTimer=setInterval(pollCustomerSignals,1500);
-      }catch(err){setMessage($("videoMessage"),err.message,"error");}
+        const r=await api("registrationResumeStatus",{registration_token:regToken});
+        renderRegDocs(r.documents||[]);
+        if(!r.ready_for_queue)throw new Error(r.queue_requirement||"Required KYC documents are incomplete.");
+        $("joinMeetKycQueue").disabled=false;
+        setQueueStatus("Documents received","You can now join the live Google Meet verification queue.");
+        setMessage($("registrationDocsMessage"),"KYC documents stored successfully.","success");
+      }catch(err){setMessage($("registrationDocsMessage"),err.message,"error");}
     });
 
-    $("leaveLiveKyc")?.addEventListener("click",()=>{
-      closeMedia();
-      setLiveStatus("You left the live call","Reload the page if you need to restart verification.","failed");
+    $("joinMeetKycQueue")?.addEventListener("click",async()=>{
+      try{
+        const r=await api("createLiveKycSession",{registration_token:regToken});
+        liveSessionId=r.session_id;$("joinMeetKycQueue").disabled=true;
+        setQueueStatus("Waiting for a KYC agent","Keep this page open. The Meet link will appear when an agent accepts.","waiting");
+        startMeetPolling();
+      }catch(err){setMessage($("registrationDocsMessage"),err.message,"error");}
     });
-
-    window.addEventListener("beforeunload",()=>closeMedia());
   }
+
 
 
   function drawChart(canvas, values) {
@@ -391,7 +302,9 @@
     const token = requireCustomer(); if (!token) return;
     try {
       const r = await api("customerDashboard", {token});
-      $("welcome").textContent = `Welcome, ${r.customer.full_name}`;
+      $("welcome").textContent = `Welcome, ${r.settings?.preferred_name || r.customer.full_name}`;
+      if(String(r.settings?.compact_dashboard)==="TRUE") document.body.classList.add("compact-customer");
+      if(String(r.settings?.show_trade_quality)==="FALSE" && $("tradeQualityPanel")) $("tradeQualityPanel").hidden=true;
       $("accountStatus").textContent = r.customer.account_status;
       if($("amountPlaced")) $("amountPlaced").textContent = money(r.metrics.amount_placed);
       $("currentAmount").textContent = money(r.metrics.current_amount);
@@ -439,77 +352,93 @@
 
   // CUSTOMER KYC + VIDEO
   async function initCustomerKyc() {
-    const form = $("kycForm"); if (!form) return;
-    const token = requireCustomer(); if (!token) return;
-    const msg = $("message"), videoMsg = $("videoMessage");
-    let stream = null, recorder = null, chunks = [];
-    try {
-      const r = await api("getKyc", {token});
-      $("kycStatus").textContent = r.kyc?.status || "NOT SUBMITTED";
-      if (r.kyc) {
-        form.pan.value = r.kyc.pan || "";
-        form.dob.value = r.kyc.dob || "";
-        form.address.value = r.kyc.address || "";
-        form.identity_ref.value = r.kyc.identity_ref || "";
-      }
-    } catch (err) { if (!sessionFailure(err)) setMessage(msg, err.message, "error"); }
-
-    form.addEventListener("submit", async e => {
-      e.preventDefault();
-      const f = new FormData(form);
-      setMessage(msg, "Submitting…");
-      try {
-        await api("submitKyc", {
-          token,
-          pan: String(f.get("pan") || "").toUpperCase(),
-          dob: f.get("dob"),
-          address: f.get("address"),
-          identity_ref: f.get("identity_ref")
-        });
-        $("kycStatus").textContent = "PENDING";
-        setMessage(msg, "KYC details submitted for review.", "success");
-      } catch (err) { setMessage(msg, err.message, "error"); }
-    });
-
-    $("startCamera")?.addEventListener("click", async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
-        $("preview").srcObject = stream;
-        $("recordVideo").disabled = false;
-        setMessage(videoMsg, "Camera ready.", "success");
-      } catch (_) {
-        setMessage(videoMsg, "Camera/microphone permission is required.", "error");
-      }
-    });
-
-    $("recordVideo")?.addEventListener("click", () => {
-      if (!stream) return;
-      chunks = [];
-      const opts = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
-        ? {mimeType:"video/webm;codecs=vp8,opus"} : {};
-      recorder = new MediaRecorder(stream, opts);
-      recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, {type:recorder.mimeType || "video/webm"});
-        const mb = blob.size/1024/1024;
-        if (mb > CONFIG.VIDEO_MAX_MB) {
-          return setMessage(videoMsg, `Video is ${mb.toFixed(1)} MB; MVP limit is ${CONFIG.VIDEO_MAX_MB} MB.`, "error");
+    const form=$("kycForm");if(!form)return;
+    const token=requireCustomer();if(!token)return;
+    const msg=$("message");
+    const renderDocs=docs=>{
+      $("customerDocuments").innerHTML=(docs||[]).map(d=>`<div class="document-item"><div><strong>${esc(d.document_type)}</strong><span>${esc(d.file_name||"Document")} · ${esc(d.status||"RECEIVED")}</span></div><span class="status-pill">${esc(d.status||"RECEIVED")}</span></div>`).join("")||'<div class="muted">No KYC documents uploaded yet.</div>';
+    };
+    async function load(){
+      try{
+        const r=await api("getKycCenter",{token});
+        $("kycStatus").textContent=r.kyc?.status||"NOT SUBMITTED";
+        if(r.kyc){
+          form.pan.value=r.kyc.pan||"";form.dob.value=r.kyc.dob||"";form.address.value=r.kyc.address||"";form.identity_ref.value=r.kyc.identity_ref||"";
+          $("aadhaarMasked").value=r.kyc.aadhaar_masked||"Not provided";
         }
-        setMessage(videoMsg, "Uploading verification clip…");
-        const reader = new FileReader();
-        reader.onload = async () => {
-          try {
-            const base64 = String(reader.result).split(",")[1];
-            await api("uploadKycVideo", {token, mime_type:blob.type, file_base64:base64});
-            setMessage(videoMsg, "Verification clip uploaded for admin review.", "success");
-          } catch (err) { setMessage(videoMsg, err.message, "error"); }
-        };
-        reader.readAsDataURL(blob);
-      };
-      recorder.start();
-      setMessage(videoMsg, "Recording for 15 seconds…");
-      setTimeout(() => recorder?.state === "recording" && recorder.stop(), 15000);
+        renderDocs(r.documents||[]);
+        renderMeet(r.meet||null);
+      }catch(err){if(!sessionFailure(err))setMessage(msg,err.message,"error");}
+    }
+    function renderMeet(meet){
+      const pill=$("customerMeetPill"),box=$("customerMeetStatus"),link=$("joinCustomerMeet");
+      if(!meet){pill.textContent="No active session";box.className="meet-status-box";box.textContent="No live KYC session is currently active.";link.hidden=true;return;}
+      pill.textContent=meet.status||"KYC";box.className=`meet-status-box ${meet.meet_url?"ready":"waiting"}`;
+      box.textContent=meet.meet_url?"Your Google Meet is ready. Join the KYC agent for live verification.":"Your KYC request is waiting for an authorised agent.";
+      if(meet.meet_url){link.href=meet.meet_url;link.hidden=false}else link.hidden=true;
+    }
+    form.addEventListener("submit",async e=>{
+      e.preventDefault();const f=new FormData(form);
+      try{
+        await api("submitKyc",{token,pan:String(f.get("pan")||"").toUpperCase(),dob:f.get("dob"),address:f.get("address"),identity_ref:f.get("identity_ref"),aadhaar_number:String(f.get("aadhaar_number")||"")});
+        form.aadhaar_number.value="";setMessage(msg,"KYC information updated securely.","success");await load();
+      }catch(err){setMessage(msg,err.message,"error");}
     });
+    $("customerDocumentForm")?.addEventListener("submit",async e=>{
+      e.preventDefault();const f=new FormData(e.currentTarget);
+      try{
+        const fp=await filePayload(f.get("document"));
+        await api("uploadCustomerDocument",{token,document_type:f.get("document_type"),reference:f.get("reference"),...fp});
+        e.currentTarget.reset();setMessage($("documentMessage"),"Document uploaded securely.","success");await load();
+      }catch(err){setMessage($("documentMessage"),err.message,"error");}
+    });
+    $("requestMeetKyc")?.addEventListener("click",async()=>{
+      try{await api("requestCustomerMeetKyc",{token});setMessage($("documentMessage"),"Live KYC request placed.","success");await load();}
+      catch(err){setMessage($("documentMessage"),err.message,"error");}
+    });
+    load();setInterval(async()=>{try{const r=await api("customerMeetKycStatus",{token});renderMeet(r.meet||null);}catch(_){}},5000);
+  }
+
+
+
+  async function initCustomerSettings(){
+    const form=$("customerSettingsForm");if(!form)return;
+    const token=requireCustomer();if(!token)return;
+    try{
+      const r=await api("customerSettingsGet",{token}),s=r.settings||{},c=r.customer||{};
+      $("settingsFullName").value=c.full_name||"";$("settingsEmail").value=c.email||"";$("settingsAccountStatus").textContent=c.account_status||"";
+      form.preferred_name.value=s.preferred_name||"";form.mobile.value=c.mobile||"";form.address.value=c.address||"";
+      form.email_notifications.checked=String(s.email_notifications)!=="FALSE";
+      form.trade_notifications.checked=String(s.trade_notifications)==="TRUE";
+      form.compact_dashboard.checked=String(s.compact_dashboard)==="TRUE";
+      form.show_trade_quality.checked=String(s.show_trade_quality)!=="FALSE";
+    }catch(err){if(!sessionFailure(err))setMessage($("settingsMessage"),err.message,"error");}
+    form.addEventListener("submit",async e=>{
+      e.preventDefault();const f=new FormData(form);
+      try{
+        await api("customerSettingsSave",{token,preferred_name:f.get("preferred_name"),mobile:f.get("mobile"),address:f.get("address"),
+          email_notifications:Boolean(f.get("email_notifications")),trade_notifications:Boolean(f.get("trade_notifications")),
+          compact_dashboard:Boolean(f.get("compact_dashboard")),show_trade_quality:Boolean(f.get("show_trade_quality"))});
+        setMessage($("settingsMessage"),"Account settings saved.","success");
+      }catch(err){setMessage($("settingsMessage"),err.message,"error");}
+    });
+    $("changePasswordForm")?.addEventListener("submit",async e=>{
+      e.preventDefault();const f=new FormData(e.currentTarget);
+      if(f.get("new_password")!==f.get("confirm_password"))return setMessage($("passwordMessage"),"New passwords do not match.","error");
+      try{
+        await api("customerChangePassword",{token,current_password:f.get("current_password"),new_password:f.get("new_password")});
+        e.currentTarget.reset();setMessage($("passwordMessage"),"Password changed. Other sessions were revoked.","success");
+      }catch(err){setMessage($("passwordMessage"),err.message,"error");}
+    });
+  }
+
+  async function initCustomerTeam(){
+    const box=$("customerTeamCards");if(!box)return;
+    const token=requireCustomer();if(!token)return;
+    try{
+      const r=await api("customerTeam",{token});
+      box.innerHTML=(r.team||[]).map(m=>`<article class="team-card"><div class="avatar">${esc(String(m.member_name||"S").slice(0,1).toUpperCase())}</div><h3>${esc(m.member_name)}</h3><p><b>${esc(m.role)}</b></p>${m.email?`<p>${esc(m.email)}</p>`:""}${m.phone?`<p>${esc(m.phone)}</p>`:""}</article>`).join("")||'<div class="alert">Your account team has not been assigned yet. SARKSH operations will update this section.</div>';
+    }catch(err){if(!sessionFailure(err))box.innerHTML=`<div class="alert danger">${esc(err.message)}</div>`;}
   }
 
   // ADMIN LOGIN: password -> email OTP -> Google Authenticator TOTP
@@ -845,162 +774,70 @@
 
 
   async function initAdminLiveKyc() {
-    const queue=$("liveKycQueue");
-    if(!queue) return;
-
+    const queue=$("liveKycQueue");if(!queue)return;
     let activeSessionId="";
-    let localStream=null;
-    let peer=null;
-    let queueTimer=null;
-    let signalTimer=null;
-    let lastSignalSeq=0;
-    let pendingIce=[];
-    let customerOfferHandled=false;
-
-    const statusPill=$("agentCallStatus");
-    const setAgentStatus=(text,cls="")=>{
-      statusPill.textContent=text;
-      statusPill.className=`status-pill ${cls}`.trim();
-    };
-    const stopSignal=()=>{if(signalTimer)clearInterval(signalTimer);signalTimer=null;};
-    const closePeer=()=>{
-      stopSignal();
-      try{peer?.close();}catch(_){}
-      peer=null;customerOfferHandled=false;pendingIce=[];lastSignalSeq=0;
-      localStream?.getTracks().forEach(t=>t.stop());localStream=null;
-      if($("agentLocalVideo"))$("agentLocalVideo").srcObject=null;
-      if($("agentRemoteVideo"))$("agentRemoteVideo").srcObject=null;
-      ["markVerified","markResubmit","markRejected"].forEach(id=>{$(id).disabled=true;});
-    };
-
-    async function sendAgentSignal(type,payload){
-      return adminCall("liveKycSignalSend",{
-        session_id:activeSessionId,participant:"AGENT",type,payload_json:JSON.stringify(payload)
-      });
-    }
-    async function flushAgentIce(){
-      if(!peer?.remoteDescription)return;
-      const q=[...pendingIce];pendingIce=[];
-      for(const c of q){try{await peer.addIceCandidate(c);}catch(_){}}
-    }
-    async function ensureAgentMedia(){
-      if(localStream)return;
-      localStream=await navigator.mediaDevices.getUserMedia({
-        video:{width:{ideal:640},height:{ideal:480},frameRate:{ideal:15,max:24}},
-        audio:{echoCancellation:true,noiseSuppression:true}
-      });
-      $("agentLocalVideo").srcObject=localStream;
-    }
-    async function handleCustomerOffer(desc){
-      if(customerOfferHandled)return;
-      customerOfferHandled=true;
-      await ensureAgentMedia();
-      peer=new RTCPeerConnection(RTC_CONFIG);
-      localStream.getTracks().forEach(t=>peer.addTrack(t,localStream));
-      peer.ontrack=ev=>{const s=ev.streams?.[0];if(s)$("agentRemoteVideo").srcObject=s;};
-      peer.onicecandidate=ev=>{if(ev.candidate)sendAgentSignal("ICE",ev.candidate.toJSON?ev.candidate.toJSON():ev.candidate).catch(()=>{});};
-      peer.onconnectionstatechange=async()=>{
-        const s=peer.connectionState;
-        if(s==="connected"){
-          setAgentStatus("LIVE","success");
-          ["markVerified","markResubmit","markRejected"].forEach(id=>{$(id).disabled=false;});
-          try{await adminCall("agentMarkLiveKycConnected",{session_id:activeSessionId});}catch(_){}
-          setMessage($("agentLiveMessage"),"Live peer-to-peer KYC connection established.","success");
-        }else if(["failed","disconnected"].includes(s)){
-          setAgentStatus("Connection interrupted","warning");
-        }
-      };
-      await peer.setRemoteDescription(desc);
-      await flushAgentIce();
-      const answer=await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-      await sendAgentSignal("ANSWER",{type:answer.type,sdp:answer.sdp});
-    }
-    async function pollAgentSignals(){
-      if(!activeSessionId)return;
-      try{
-        const r=await adminCall("liveKycSignalPoll",{
-          session_id:activeSessionId,participant:"AGENT",after_seq:lastSignalSeq
-        });
-        for(const s of (r.signals||[])){
-          lastSignalSeq=Math.max(lastSignalSeq,Number(s.seq||0));
-          const payload=JSON.parse(s.payload_json||"{}");
-          if(s.type==="OFFER") await handleCustomerOffer(payload);
-          else if(s.type==="ICE"){
-            const cand=new RTCIceCandidate(payload);
-            if(peer?.remoteDescription){try{await peer.addIceCandidate(cand);}catch(_){}}
-            else pendingIce.push(cand);
-          }
-        }
-      }catch(err){console.warn("Agent KYC signal:",err.message);}
-    }
-
+    const setStatus=(t,cls="")=>{$("agentCallStatus").textContent=t;$("agentCallStatus").className=`status-pill ${cls}`.trim();};
+    const renderDocs=docs=>{$("agentKycDocuments").innerHTML=(docs||[]).map(d=>`<div class="document-item"><div><strong>${esc(d.document_type)}</strong><span>${esc(d.file_name||"Document")} · ${esc(d.status||"RECEIVED")}</span></div>${d.file_url?`<a class="btn ghost" href="${esc(d.file_url)}" target="_blank" rel="noopener">Open</a>`:""}</div>`).join("")||'<div class="muted">No documents uploaded.</div>';};
     async function loadQueue(){
       try{
-        const r=await adminCall("agentLiveKycQueue");
-        const items=r.sessions||[];
+        const r=await adminCall("agentLiveKycQueue"),items=r.sessions||[];
         $("liveQueuePill").textContent=`${items.filter(x=>x.status==="WAITING_AGENT").length} waiting`;
         $("liveQueuePill").className=`status-pill ${items.some(x=>x.status==="WAITING_AGENT")?"warning":"success"}`;
-        queue.innerHTML=items.map(x=>`
-          <div class="live-queue-item ${x.status==="WAITING_AGENT"?"waiting":"mine"}">
-            <h3>${esc(x.full_name)} · ${esc(x.customer_id)}</h3>
-            <div class="live-queue-meta">
-              <span>${esc(x.status)}</span><span>${esc(x.email)}</span><span>PAN ${esc(x.pan_masked||"—")}</span>
-              <span>Waiting ${esc(x.wait_minutes)} min</span>
-            </div>
-            <button class="btn ${x.status==="WAITING_AGENT"?"primary":"secondary"}" data-live-session="${esc(x.session_id)}">
-              ${x.status==="WAITING_AGENT"?"Accept & Join":"Open Session"}
-            </button>
-          </div>`).join("") || '<div class="alert success">No customers are waiting for live verification.</div>';
-      }catch(err){
-        if(!sessionFailure(err))queue.innerHTML=`<div class="alert danger">${esc(err.message)}</div>`;
-      }
+        queue.innerHTML=items.map(x=>`<div class="live-queue-item ${x.status==="WAITING_AGENT"?"waiting":"mine"}"><h3>${esc(x.full_name)} · ${esc(x.customer_id)}</h3><div class="live-queue-meta"><span>${esc(x.status)}</span><span>${esc(x.email)}</span><span>${esc(x.pan_masked||"")}</span><span>${esc(x.aadhaar_masked||"")}</span><span>${esc(x.wait_minutes)} min</span></div><button class="btn ${x.status==="WAITING_AGENT"?"primary":"secondary"}" data-live-session="${esc(x.session_id)}">Open KYC Workspace</button></div>`).join("")||'<div class="alert success">No customers are waiting.</div>';
+      }catch(err){if(!sessionFailure(err))queue.innerHTML=`<div class="alert danger">${esc(err.message)}</div>`;}
     }
-
     queue.addEventListener("click",async e=>{
       const id=e.target.dataset.liveSession;if(!id)return;
       try{
-        closePeer();
-        const r=await adminCall("agentAcceptLiveKyc",{session_id:id});
-        activeSessionId=id;
+        const r=await adminCall("agentAcceptLiveKyc",{session_id:id});activeSessionId=id;
         $("agentCallTitle").textContent=`${r.customer.full_name} · ${r.customer.customer_id}`;
-        $("agentCustomerSummary").innerHTML=[
-          ["Email",r.customer.email],["Mobile",r.customer.mobile],["PAN",r.customer.pan_masked],
-          ["DOB",r.customer.dob],["Address",r.customer.address],["Agreement",r.customer.agreement_version]
-        ].map(([k,v])=>`<div class="detail-item"><small>${esc(k)}</small><b>${esc(v||"—")}</b></div>`).join("");
-        setAgentStatus("Waiting for customer connection","warning");
-        setMessage($("agentLiveMessage"),"Session accepted. Waiting for the customer's WebRTC offer…");
-        await ensureAgentMedia();
-        signalTimer=setInterval(pollAgentSignals,1200);
-        await pollAgentSignals();
+        $("agentCustomerSummary").innerHTML=[["Email",r.customer.email],["Mobile",r.customer.mobile],["PAN",r.customer.pan_masked],["Aadhaar",r.customer.aadhaar_masked],["DOB",r.customer.dob],["Address",r.customer.address],["Agreement",r.customer.agreement_version]].map(([k,v])=>`<div class="detail-item"><small>${esc(k)}</small><b>${esc(v||"—")}</b></div>`).join("");
+        renderDocs(r.documents||[]);setStatus(r.meet_url?"Meet ready":"Customer selected",r.meet_url?"success":"warning");
+        $("createAgentMeet").disabled=Boolean(r.meet_url);
+        if(r.meet_url){$("joinAgentMeet").href=r.meet_url;$("joinAgentMeet").hidden=false;["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=false);}
+        else{$("joinAgentMeet").hidden=true;["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=true);}
         await loadQueue();
       }catch(err){setMessage($("agentLiveMessage"),err.message,"error");}
     });
-
-    async function finish(result){
+    $("createAgentMeet")?.addEventListener("click",async()=>{
       if(!activeSessionId)return;
-      const remarks=$("liveKycRemarks").value||"";
-      if(!remarks && result!=="VERIFIED") {
-        return setMessage($("agentLiveMessage"),"Enter remarks before requesting re-verification or rejecting.","error");
-      }
+      try{
+        setMessage($("agentLiveMessage"),"Creating Google Meet and sending Calendar invitations…");
+        const r=await adminCall("agentCreateMeetKyc",{session_id:activeSessionId});
+        $("joinAgentMeet").href=r.meet_url;$("joinAgentMeet").hidden=false;$("createAgentMeet").disabled=true;
+        ["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=false);setStatus("Meet ready","success");
+        setMessage($("agentLiveMessage"),"Google Meet created. Customer and agent invitations were sent.","success");
+      }catch(err){setMessage($("agentLiveMessage"),err.message,"error");}
+    });
+    async function finish(result){
+      if(!activeSessionId)return;const remarks=$("liveKycRemarks").value||"";
+      if(result!=="VERIFIED"&&!remarks)return setMessage($("agentLiveMessage"),"Enter remarks before re-verification or rejection.","error");
       try{
         await adminCall("agentCompleteLiveKyc",{session_id:activeSessionId,result,remarks});
-        setMessage($("agentLiveMessage"),
-          result==="VERIFIED"?"Customer verified and account activated.":`Live KYC closed with result: ${result}.`,
-          result==="VERIFIED"?"success":"error");
-        setAgentStatus("Completed",result==="VERIFIED"?"success":"warning");
-        closePeer();activeSessionId="";$("liveKycRemarks").value="";
-        await loadQueue();
+        setMessage($("agentLiveMessage"),result==="VERIFIED"?"Customer verified and activated.":`KYC result: ${result}.`,result==="VERIFIED"?"success":"error");
+        activeSessionId="";$("liveKycRemarks").value="";$("joinAgentMeet").hidden=true;$("createAgentMeet").disabled=true;
+        ["markVerified","markResubmit","markRejected"].forEach(x=>$(x).disabled=true);setStatus("Completed","success");await loadQueue();
       }catch(err){setMessage($("agentLiveMessage"),err.message,"error");}
     }
-    $("markVerified").addEventListener("click",()=>finish("VERIFIED"));
-    $("markResubmit").addEventListener("click",()=>finish("RESUBMIT"));
-    $("markRejected").addEventListener("click",()=>finish("REJECTED"));
-    $("refreshLiveQueue").addEventListener("click",loadQueue);
+    $("markVerified")?.addEventListener("click",()=>finish("VERIFIED"));
+    $("markResubmit")?.addEventListener("click",()=>finish("RESUBMIT"));
+    $("markRejected")?.addEventListener("click",()=>finish("REJECTED"));
+    $("refreshLiveQueue")?.addEventListener("click",loadQueue);
+    await loadQueue();setInterval(loadQueue,5000);
+  }
 
-    await loadQueue();
-    queueTimer=setInterval(loadQueue,4000);
-    window.addEventListener("beforeunload",()=>{if(queueTimer)clearInterval(queueTimer);closePeer();});
+
+
+  function initAdminCustomerTeamAssignment(){
+    const form=$("assignCustomerTeamForm");if(!form)return;
+    const id=new URLSearchParams(location.search).get("id");if(!id)return;
+    form.addEventListener("submit",async e=>{
+      e.preventDefault();const f=new FormData(form);
+      try{
+        await adminCall("adminAssignCustomerTeam",{customer_id:id,member_name:f.get("member_name"),role:f.get("role"),email:f.get("email"),phone:f.get("phone")});
+        setMessage($("assignTeamMessage"),"Team member assigned. Reloading customer view…","success");setTimeout(()=>location.reload(),600);
+      }catch(err){setMessage($("assignTeamMessage"),err.message,"error");}
+    });
   }
 
   async function boot() {
@@ -1022,6 +859,9 @@
     await initAdmins();
     await initAgreementAdmin();
     await initAdminLiveKyc();
+    await initCustomerSettings();
+    await initCustomerTeam();
+    initAdminCustomerTeamAssignment();
   }
 
   boot().catch(err => {

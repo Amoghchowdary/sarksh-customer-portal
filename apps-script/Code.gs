@@ -11,13 +11,15 @@
  */
 
 const SARKSH = {
-  VERSION: '5.0.0',
+  VERSION: '6.0.0',
   TIMEZONE: 'Asia/Kolkata',
   SESSION_HOURS: 12,
   PASSWORD_ITERATIONS: 1200,
   CUSTOMER_PREFIX: 'SAR',
   ADMIN_PREFIX: 'ADM',
   VIDEO_MAX_BYTES: 3 * 1024 * 1024,
+  DOCUMENT_MAX_BYTES: 2 * 1024 * 1024,
+  PROP_AADHAAR_PEPPER: 'SARKSH_AADHAAR_PEPPER',
   PROP_SHEET_ID: 'SARKSH_SHEET_ID',
   PROP_KYC_FOLDER_ID: 'SARKSH_KYC_FOLDER_ID',
   PRIMARY_ADMIN_EMAIL: 'grow@sarksh.in',
@@ -45,7 +47,9 @@ const TABS = {
   CONSENTS:'17_CONSENTS',
   REGISTRATIONS:'18_REGISTRATIONS',
   KYC_LIVE:'19_KYC_LIVE_SESSIONS',
-  KYC_SIGNAL:'20_KYC_SIGNAL'
+  KYC_SIGNAL:'20_KYC_SIGNAL',
+  CUSTOMER_TEAM:'21_CUSTOMER_TEAM',
+  CUSTOMER_PREFS:'22_CUSTOMER_SETTINGS'
 };
 
 const HEADERS = {
@@ -54,8 +58,8 @@ const HEADERS = {
   '03_ADMINS':['admin_id','name','email','password_hash','password_salt','role','status','created_at','last_login','otp_email','totp_secret','totp_enabled','failed_attempts','locked_until'],
   '04_ROLES':['role','description'],
   '05_SESSIONS':['session_id','token_hash','user_id','role','created_at','expires_at','last_seen','revoked'],
-  '06_KYC':['kyc_id','customer_id','pan','dob','address','identity_ref','status','submitted_at','reviewed_at','reviewed_by','remarks','video_file_id','video_view_url'],
-  '07_KYC_DOCUMENTS':['document_id','customer_id','document_type','file_id','file_url','created_at'],
+  '06_KYC':['kyc_id','customer_id','pan','dob','address','identity_ref','aadhaar_masked','aadhaar_hmac','aadhaar_mode','status','submitted_at','reviewed_at','reviewed_by','remarks','video_file_id','video_view_url'],
+  '07_KYC_DOCUMENTS':['document_id','customer_id','document_type','file_id','file_url','file_name','mime_type','status','uploaded_by','remarks','masked_reference','sha256','created_at'],
   '08_TRADES':['trade_id','customer_id','trade_date','symbol','exchange','trade_type','quantity','entry_price','exit_price','gross_pnl','charges','net_pnl','status','entered_by','created_at','updated_at'],
   '09_ACCOUNTS':['account_id','customer_id','status','opening_balance','created_at','updated_at'],
   '10_LEDGER':['transaction_id','customer_id','date','type','amount','signed_amount','reference','description','created_at','created_by'],
@@ -67,8 +71,10 @@ const HEADERS = {
   '16_AUTH_CHALLENGES':['challenge_id','admin_id','stage','otp_hash','expires_at','attempts','created_at','used'],
   '17_CONSENTS':['consent_id','customer_id','agreement_title','agreement_version','agreement_hash','accepted_name','accepted_at','request_id','user_agent','status'],
   '18_REGISTRATIONS':['registration_id','token_hash','user_id','customer_id','expires_at','used','created_at','status','live_kyc_session_id'],
-  '19_KYC_LIVE_SESSIONS':['session_id','customer_id','user_id','registration_id','status','assigned_agent_id','created_at','accepted_at','started_at','ended_at','result','remarks'],
-  '20_KYC_SIGNAL':['signal_id','session_id','sender','seq','type','payload_json','created_at']
+  '19_KYC_LIVE_SESSIONS':['session_id','customer_id','user_id','registration_id','status','assigned_agent_id','meet_url','calendar_event_id','scheduled_start','scheduled_end','meet_created_at','created_at','accepted_at','started_at','ended_at','result','remarks'],
+  '20_KYC_SIGNAL':['signal_id','session_id','sender','seq','type','payload_json','created_at'],
+  '21_CUSTOMER_TEAM':['assignment_id','customer_id','member_name','role','email','phone','status','assigned_at','assigned_by'],
+  '22_CUSTOMER_SETTINGS':['customer_id','preferred_name','email_notifications','trade_notifications','compact_dashboard','show_trade_quality','updated_at']
 };
 
 /* =========================================================
@@ -103,6 +109,7 @@ function setupSarkshPortal() {
   ensureSetting_('registration_agreement_version','DRAFT-NOT-CONFIGURED');
   ensureSetting_('registration_agreement_text','Agreement document has not yet been configured by the Super Admin.');
   ensureSetting_('registration_agreement_ready','FALSE');
+  ensureAadhaarPepper_();
 
   Logger.log('SARKSH V5 backend ready.');
   Logger.log('Existing database preserved: '+spreadsheet.getUrl());
@@ -114,13 +121,13 @@ function setupSarkshPortal() {
  * Makes a Drive copy of the existing database, then performs an additive schema migration.
  * Existing customer rows, trades, ledger entries, sessions and KYC records are never cleared.
  */
-function migrateV3DatabaseToV5() {
+function migrateExistingDatabaseToV6() {
   const props=PropertiesService.getScriptProperties();
   const sheetId=props.getProperty(SARKSH.PROP_SHEET_ID);
   if(!sheetId) throw new Error('Existing SARKSH database property not found. Do not continue until the V3 Apps Script project is being used.');
 
   const ss=SpreadsheetApp.openById(sheetId);
-  const backupName='SARKSH Portal DB PRE-V5 '+Utilities.formatDate(new Date(),SARKSH.TIMEZONE,'yyyy-MM-dd_HH-mm-ss');
+  const backupName='SARKSH Portal DB PRE-V6 '+Utilities.formatDate(new Date(),SARKSH.TIMEZONE,'yyyy-MM-dd_HH-mm-ss');
   const backup=DriveApp.getFileById(sheetId).makeCopy(backupName);
 
   appendMigrationBackupLog_(backup);
@@ -132,11 +139,12 @@ function migrateV3DatabaseToV5() {
   ensureSetting_('registration_agreement_version','DRAFT-NOT-CONFIGURED');
   ensureSetting_('registration_agreement_text','Agreement document has not yet been configured by the Super Admin.');
   ensureSetting_('registration_agreement_ready','FALSE');
+  ensureAadhaarPepper_();
 
-  Logger.log('V3/V4 DATABASE PRESERVED.');
+  Logger.log('EXISTING CUSTOMER DATABASE PRESERVED.');
   Logger.log('Live database: '+ss.getUrl());
   Logger.log('Pre-V5 backup: '+backup.getUrl());
-  Logger.log('Only missing tabs/columns were added.');
+  Logger.log('Only missing V6 tabs/columns were added. Existing customer rows were preserved.');
   return {database_url:ss.getUrl(),backup_url:backup.getUrl()};
 }
 
@@ -146,7 +154,7 @@ function appendMigrationBackupLog_(file) {
     const h=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
     const row={
       backup_id:makeId_('BAK'),timestamp:now_(),status:'SUCCESS',
-      reference:file.getId(),detail:'Automatic pre-V5 migration backup'
+      reference:file.getId(),detail:'Automatic pre-V6 migration backup'
     };
     sh.appendRow(h.map(k=>row[k]===undefined?'':row[k]));
   }catch(_){}
@@ -217,6 +225,8 @@ function doPost(e) {
 
     const routes = {
       getRegistrationAgreement: getRegistrationAgreement_,
+      registrationResumeStatus: registrationResumeStatus_,
+      uploadRegistrationDocument: uploadRegistrationDocument_,
       registerCustomer: registerCustomer_,
       createLiveKycSession: createLiveKycSession_,
       liveKycStatus: liveKycStatus_,
@@ -226,6 +236,14 @@ function doPost(e) {
       logout: p => logout_(p.token),
       customerDashboard: customerDashboard_,
       customerTrades: customerTrades_,
+      getKycCenter: getKycCenter_,
+      uploadCustomerDocument: uploadCustomerDocument_,
+      requestCustomerMeetKyc: requestCustomerMeetKyc_,
+      customerMeetKycStatus: customerMeetKycStatus_,
+      customerSettingsGet: customerSettingsGet_,
+      customerSettingsSave: customerSettingsSave_,
+      customerChangePassword: customerChangePassword_,
+      customerTeam: customerTeam_,
       getKyc: getKyc_,
       submitKyc: submitKyc_,
       uploadKycVideo: uploadKycVideo_,
@@ -248,10 +266,12 @@ function doPost(e) {
       adminListAdmins: adminListAdmins_,
       adminCreateAdmin: adminCreateAdmin_,
       adminSetAdminStatus: adminSetAdminStatus_,
+      adminAssignCustomerTeam: adminAssignCustomerTeam_,
       adminAgreementGet: adminAgreementGet_,
       adminAgreementSave: adminAgreementSave_,
       agentLiveKycQueue: agentLiveKycQueue_,
       agentAcceptLiveKyc: agentAcceptLiveKyc_,
+      agentCreateMeetKyc: agentCreateMeetKyc_,
       agentMarkLiveKycConnected: agentMarkLiveKycConnected_,
       agentCompleteLiveKyc: agentCompleteLiveKyc_
     };
@@ -522,6 +542,57 @@ function verifyTotp_(secret,code) {
   return false;
 }
 
+
+function ensureAadhaarPepper_() {
+  const props=PropertiesService.getScriptProperties();
+  if(!props.getProperty(SARKSH.PROP_AADHAAR_PEPPER))
+    props.setProperty(SARKSH.PROP_AADHAAR_PEPPER,Utilities.getUuid().replace(/-/g,'')+Utilities.getUuid().replace(/-/g,''));
+}
+function aadhaarReference_(value) {
+  const n=String(value||'').replace(/\D/g,'');
+  if(!n) return {masked:'',hmac:'',mode:''};
+  if(!/^[2-9][0-9]{11}$/.test(n)) throw new Error('Aadhaar number must be a valid 12-digit number.');
+  ensureAadhaarPepper_();
+  const pepper=PropertiesService.getScriptProperties().getProperty(SARKSH.PROP_AADHAAR_PEPPER);
+  const sig=Utilities.computeHmacSha256Signature(n,pepper,Utilities.Charset.UTF_8);
+  const hmac=sig.map(b=>('0'+((b<0?b+256:b).toString(16))).slice(-2)).join('');
+  return {masked:'XXXX-XXXX-'+n.slice(-4),hmac,mode:'NUMBER'};
+}
+function sanitizeDocType_(t) {
+  const v=String(t||'').toUpperCase();
+  const allowed=['PAN_CARD','AADHAAR','ADDRESS_PROOF','PHOTO','OTHER'];
+  if(!allowed.includes(v)) throw new Error('Unsupported KYC document type.');
+  return v;
+}
+function decodeDocument_(b64) {
+  let s=String(b64||'').replace(/^data:[^;]+;base64,/i,'').replace(/\s/g,'');
+  const mod=s.length%4;if(mod===1)throw new Error('Document upload is incomplete.');if(mod)s+='='.repeat(4-mod);
+  try{return Utilities.base64Decode(s);}catch(_){throw new Error('Document could not be decoded. Re-select the file and try again.');}
+}
+function saveKycDocument_(customerId,documentType,fileName,mimeType,fileBase64,uploadedBy,reference) {
+  const type=sanitizeDocType_(documentType),mime=String(mimeType||'');
+  if(!['application/pdf','image/jpeg','image/png'].includes(mime)) throw new Error('Only PDF, JPG and PNG KYC documents are supported.');
+  const bytes=decodeDocument_(fileBase64);
+  if(!bytes.length||bytes.length>SARKSH.DOCUMENT_MAX_BYTES) throw new Error('KYC document must be 2 MB or smaller.');
+  const folderId=PropertiesService.getScriptProperties().getProperty(SARKSH.PROP_KYC_FOLDER_ID);
+  if(!folderId) throw new Error('KYC Drive storage is not configured.');
+  const safeName=customerId+'_'+type+'_'+Date.now()+'_'+String(fileName||'document').replace(/[^A-Za-z0-9._-]/g,'_');
+  const file=DriveApp.getFolderById(folderId).createFile(Utilities.newBlob(bytes,mime,safeName));
+  appendRow_(TABS.KYC_DOCS,{
+    document_id:makeId_('DOC'),customer_id:customerId,document_type:type,file_id:file.getId(),file_url:file.getUrl(),
+    file_name:String(fileName||safeName),mime_type:mime,status:'RECEIVED',uploaded_by:uploadedBy||'CUSTOMER',
+    remarks:'',masked_reference:String(reference||''),sha256:hexDigest_(Utilities.base64Encode(bytes)),created_at:now_()
+  });
+  return file;
+}
+function safeCustomerDocs_(customerId,includeUrl) {
+  return getRows_(TABS.KYC_DOCS).filter(x=>x.customer_id===customerId).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).map(x=>({
+    document_id:x.document_id,document_type:x.document_type,file_name:x.file_name,mime_type:x.mime_type,status:x.status,
+    remarks:x.remarks||'',masked_reference:x.masked_reference||'',created_at:x.created_at,
+    file_url:includeUrl?x.file_url:''
+  }));
+}
+
 /* =========================================================
    AUDIT / SYSTEM LOGS
    ========================================================= */
@@ -549,6 +620,7 @@ function registerCustomer_(p) {
   const pan=String(p.pan||'').trim().toUpperCase();
   const dob=String(p.dob||'').trim(), address=String(p.address||'').trim();
   const identityRef=String(p.identity_ref||'').trim();
+  const aadhaar=aadhaarReference_(p.aadhaar_number);
   const acceptedName=String(p.accepted_name||'').trim();
   const agreement=currentAgreement_();
 
@@ -582,6 +654,7 @@ function registerCustomer_(p) {
     });
     appendRowUnlocked_(TABS.KYC,{
       kyc_id:makeId_('KYC'),customer_id:customerId,pan,dob,address,identity_ref:identityRef,
+      aadhaar_masked:aadhaar.masked,aadhaar_hmac:aadhaar.hmac,aadhaar_mode:aadhaar.mode,
       status:'WAITING_LIVE_KYC',submitted_at:created,reviewed_at:'',reviewed_by:'',remarks:'',
       video_file_id:'',video_view_url:''
     });
@@ -657,6 +730,27 @@ function uploadRegistrationVideo_(p) {
   return {ok:true,customer_id:customer.customer_id};
 }
 
+
+function registrationResumeStatus_(p) {
+  const reg=registrationByToken_(p.registration_token);
+  const k=getRows_(TABS.KYC).find(x=>x.customer_id===reg.customer_id)||{};
+  const docs=safeCustomerDocs_(reg.customer_id,false);
+  const hasPan=docs.some(d=>d.document_type==='PAN_CARD');
+  const hasAadhaarDoc=docs.some(d=>d.document_type==='AADHAAR');
+  const hasAadhaarNumber=Boolean(k.aadhaar_hmac);
+  const ready=hasPan && (hasAadhaarDoc || hasAadhaarNumber);
+  const meet=getRows_(TABS.KYC_LIVE).filter(x=>x.customer_id===reg.customer_id && ['WAITING_AGENT','AGENT_JOINING','MEET_PENDING','MEET_READY','LIVE'].includes(String(x.status))).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0]||null;
+  return {ok:true,customer_id:reg.customer_id,documents:docs,ready_for_queue:ready,
+    queue_requirement:ready?'':'Upload PAN Card and either provide Aadhaar number or upload Aadhaar document.',
+    aadhaar_masked:k.aadhaar_masked||'',meet:meet?{session_id:meet.session_id,status:meet.status,meet_url:meet.meet_url||''}:null};
+}
+function uploadRegistrationDocument_(p) {
+  const reg=registrationByToken_(p.registration_token);
+  const file=saveKycDocument_(reg.customer_id,p.document_type,p.file_name,p.mime_type,p.file_base64,reg.user_id,'');
+  audit_(reg.user_id,'CUSTOMER','KYC_DOCUMENT_UPLOAD','CUSTOMER',reg.customer_id,'SUCCESS',String(p.document_type||''));
+  return {ok:true,file_id:file.getId()};
+}
+
 function loginCustomer_(p) {
   const identifier=String(p.identifier||'').trim().toLowerCase(), password=String(p.password||'');
   const user=getRows_(TABS.USERS).find(x =>
@@ -704,12 +798,12 @@ function customerDashboard_(p) {
     .sort((a,b)=>String(a.date).localeCompare(String(b.date)))
     .reduce((arr,x)=>{arr.push((arr.length?arr[arr.length-1]:0)+Number(x.signed_amount||0));return arr;},[])
     .slice(-30);
+  const settings=getRows_(TABS.CUSTOMER_PREFS).find(x=>x.customer_id===c.customer_id)||{};
   return {
     ok:true,
     customer:{full_name:c.full_name,account_status:c.account_status,kyc_status:c.kyc_status},
-    metrics,
-    recent_trades:recent,
-    performance
+    settings:{preferred_name:settings.preferred_name||'',compact_dashboard:String(settings.compact_dashboard||'FALSE'),show_trade_quality:String(settings.show_trade_quality||'TRUE')},
+    metrics,recent_trades:recent,performance
   };
 }
 
@@ -722,6 +816,38 @@ function customerTrades_(p) {
 /* =========================================================
    KYC
    ========================================================= */
+
+function getKycCenter_(p) {
+  const ctx=customerContext_(p.token),c=ctx.customer;
+  const k=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id)||null;
+  const meet=getRows_(TABS.KYC_LIVE).filter(x=>x.customer_id===c.customer_id && ['WAITING_AGENT','AGENT_JOINING','MEET_PENDING','MEET_READY','LIVE'].includes(String(x.status))).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0]||null;
+  return {ok:true,kyc:k,documents:safeCustomerDocs_(c.customer_id,false),meet:meet?{session_id:meet.session_id,status:meet.status,meet_url:resolveStoredMeet_(meet)}:null};
+}
+function uploadCustomerDocument_(p) {
+  const ctx=customerContext_(p.token);
+  const file=saveKycDocument_(ctx.customer.customer_id,p.document_type,p.file_name,p.mime_type,p.file_base64,ctx.user.user_id,p.reference||'');
+  audit_(ctx.user.user_id,'CUSTOMER','KYC_DOCUMENT_UPLOAD','CUSTOMER',ctx.customer.customer_id,'SUCCESS',String(p.document_type||''));
+  return {ok:true,file_id:file.getId()};
+}
+function requestCustomerMeetKyc_(p) {
+  const ctx=customerContext_(p.token),c=ctx.customer;
+  const active=getRows_(TABS.KYC_LIVE).filter(x=>x.customer_id===c.customer_id && ['WAITING_AGENT','AGENT_JOINING','MEET_PENDING','MEET_READY','LIVE'].includes(String(x.status)))[0];
+  if(active)return {ok:true,session_id:active.session_id};
+  const k=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id)||{};
+  const docs=safeCustomerDocs_(c.customer_id,false);
+  if(!docs.some(d=>d.document_type==='PAN_CARD'))throw new Error('Upload PAN Card before requesting live KYC.');
+  if(!k.aadhaar_hmac && !docs.some(d=>d.document_type==='AADHAAR'))throw new Error('Provide Aadhaar number or upload Aadhaar document before live KYC.');
+  const sid=makeId_('LKY');
+  appendRow_(TABS.KYC_LIVE,{session_id:sid,customer_id:c.customer_id,user_id:ctx.user.user_id,registration_id:'EXISTING_CUSTOMER',status:'WAITING_AGENT',assigned_agent_id:'',meet_url:'',calendar_event_id:'',scheduled_start:'',scheduled_end:'',meet_created_at:'',created_at:now_(),accepted_at:'',started_at:'',ended_at:'',result:'',remarks:''});
+  updateRow_(TABS.CUSTOMERS,c.__row,{kyc_status:'WAITING_AGENT',updated_at:now_()});
+  return {ok:true,session_id:sid};
+}
+function customerMeetKycStatus_(p) {
+  const ctx=customerContext_(p.token),c=ctx.customer;
+  const meet=getRows_(TABS.KYC_LIVE).filter(x=>x.customer_id===c.customer_id && ['WAITING_AGENT','AGENT_JOINING','MEET_PENDING','MEET_READY','LIVE'].includes(String(x.status))).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0]||null;
+  return {ok:true,meet:meet?{session_id:meet.session_id,status:meet.status,meet_url:resolveStoredMeet_(meet)}:null};
+}
+
 function getKyc_(p) {
   const c=customerContext_(p.token).customer;
   const k=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id);
@@ -731,12 +857,13 @@ function getKyc_(p) {
 function submitKyc_(p) {
   const ctx=customerContext_(p.token), c=ctx.customer;
   const pan=String(p.pan||'').toUpperCase().trim();
+  const aadhaar=aadhaarReference_(p.aadhaar_number);
   if(pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) throw new Error('PAN format is invalid.');
 
   const existing=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id);
   const patch={
     customer_id:c.customer_id,pan,dob:String(p.dob||''),address:String(p.address||''),
-    identity_ref:String(p.identity_ref||''),status:'PENDING',submitted_at:now_(),
+    identity_ref:String(p.identity_ref||''),aadhaar_masked:aadhaar.masked||existing?.aadhaar_masked||'',aadhaar_hmac:aadhaar.hmac||existing?.aadhaar_hmac||'',aadhaar_mode:aadhaar.mode||existing?.aadhaar_mode||'',status:'PENDING',submitted_at:now_(),
     reviewed_at:'',reviewed_by:'',remarks:''
   };
   if(existing) updateRow_(TABS.KYC,existing.__row,patch);
@@ -774,6 +901,38 @@ function uploadKycVideo_(p) {
   });
   audit_(ctx.user.user_id,'CUSTOMER','KYC_VIDEO_UPLOAD','CUSTOMER',c.customer_id,'SUCCESS',file.getId());
   return {ok:true,file_id:file.getId()};
+}
+
+
+function customerSettingsGet_(p) {
+  const ctx=customerContext_(p.token),c=ctx.customer;
+  const s=getRows_(TABS.CUSTOMER_PREFS).find(x=>x.customer_id===c.customer_id)||{};
+  return {ok:true,customer:{full_name:c.full_name,email:c.email,mobile:c.mobile,address:c.address,account_status:c.account_status},
+    settings:{preferred_name:s.preferred_name||'',email_notifications:String(s.email_notifications||'TRUE'),trade_notifications:String(s.trade_notifications||'FALSE'),compact_dashboard:String(s.compact_dashboard||'FALSE'),show_trade_quality:String(s.show_trade_quality||'TRUE')}};
+}
+function customerSettingsSave_(p) {
+  const ctx=customerContext_(p.token),c=ctx.customer;
+  const mobile=String(p.mobile||'').trim();if(!/^\d{10,15}$/.test(mobile))throw new Error('Valid mobile number is required.');
+  updateRow_(TABS.CUSTOMERS,c.__row,{mobile,address:String(p.address||''),updated_at:now_()});
+  const patch={customer_id:c.customer_id,preferred_name:String(p.preferred_name||'').trim(),email_notifications:p.email_notifications?'TRUE':'FALSE',trade_notifications:p.trade_notifications?'TRUE':'FALSE',compact_dashboard:p.compact_dashboard?'TRUE':'FALSE',show_trade_quality:p.show_trade_quality?'TRUE':'FALSE',updated_at:now_()};
+  const existing=getRows_(TABS.CUSTOMER_PREFS).find(x=>x.customer_id===c.customer_id);
+  if(existing)updateRow_(TABS.CUSTOMER_PREFS,existing.__row,patch);else appendRow_(TABS.CUSTOMER_PREFS,patch);
+  audit_(ctx.user.user_id,'CUSTOMER','SETTINGS_UPDATE','CUSTOMER',c.customer_id,'SUCCESS','');
+  return {ok:true};
+}
+function customerChangePassword_(p) {
+  const ctx=customerContext_(p.token),u=ctx.user;
+  if(hashPassword_(String(p.current_password||''),u.password_salt)!==String(u.password_hash))throw new Error('Current password is incorrect.');
+  const np=String(p.new_password||'');if(np.length<8)throw new Error('New password must be at least 8 characters.');
+  const salt=newSalt_();updateRow_(TABS.USERS,u.__row,{password_hash:hashPassword_(np,salt),password_salt:salt});
+  getRows_(TABS.SESSIONS).filter(x=>x.user_id===u.user_id && x.session_id!==ctx.session.session_id && String(x.revoked)!=='TRUE').forEach(s=>updateRow_(TABS.SESSIONS,s.__row,{revoked:'TRUE'}));
+  audit_(u.user_id,'CUSTOMER','PASSWORD_CHANGE','CUSTOMER',u.customer_id,'SUCCESS','');
+  return {ok:true};
+}
+function customerTeam_(p) {
+  const ctx=customerContext_(p.token);
+  const team=getRows_(TABS.CUSTOMER_TEAM).filter(x=>x.customer_id===ctx.customer.customer_id && String(x.status||'ACTIVE')==='ACTIVE');
+  return {ok:true,team};
 }
 
 /* =========================================================
@@ -872,7 +1031,9 @@ function adminCustomerDashboard_(p) {
   const ledger=getRows_(TABS.LEDGER).filter(x=>x.customer_id===c.customer_id).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const kyc=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id)||null;
   const consent=getRows_(TABS.CONSENTS).filter(x=>x.customer_id===c.customer_id).slice(-1)[0]||null;
-  return {ok:true,customer:c,metrics:metricsForCustomer_(c.customer_id),trades,ledger,kyc,consent};
+  const documents=safeCustomerDocs_(c.customer_id,true);
+  const team=getRows_(TABS.CUSTOMER_TEAM).filter(x=>x.customer_id===c.customer_id && String(x.status||'ACTIVE')==='ACTIVE');
+  return {ok:true,customer:c,metrics:metricsForCustomer_(c.customer_id),trades,ledger,kyc,consent,documents,team};
 }
 
 
@@ -892,6 +1053,10 @@ function liveSessionForCustomer_(sessionId,reg) {
 }
 function createLiveKycSession_(p) {
   const reg=registrationByToken_(p.registration_token);
+  const kyc=getRows_(TABS.KYC).find(x=>x.customer_id===reg.customer_id)||{};
+  const docs=safeCustomerDocs_(reg.customer_id,false);
+  if(!docs.some(d=>d.document_type==='PAN_CARD')) throw new Error('PAN Card must be uploaded before joining KYC queue.');
+  if(!kyc.aadhaar_hmac && !docs.some(d=>d.document_type==='AADHAAR')) throw new Error('Provide Aadhaar number or upload Aadhaar document before joining KYC queue.');
   const existing=getRows_(TABS.KYC_LIVE)
     .filter(x=>x.customer_id===reg.customer_id)
     .sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0];
@@ -906,7 +1071,7 @@ function createLiveKycSession_(p) {
   const sessionId=makeId_('LKY');
   appendRow_(TABS.KYC_LIVE,{
     session_id:sessionId,customer_id:reg.customer_id,user_id:reg.user_id,registration_id:reg.registration_id,
-    status:'WAITING_AGENT',assigned_agent_id:'',created_at:now_(),accepted_at:'',started_at:'',ended_at:'',
+    status:'WAITING_AGENT',assigned_agent_id:'',meet_url:'',calendar_event_id:'',scheduled_start:'',scheduled_end:'',meet_created_at:'',created_at:now_(),accepted_at:'',started_at:'',ended_at:'',
     result:'',remarks:''
   });
   updateRow_(TABS.REGISTRATIONS,reg.__row,{status:'WAITING_AGENT',live_kyc_session_id:sessionId});
@@ -925,7 +1090,7 @@ function liveKycStatus_(p) {
     .sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)));
   const pos=Math.max(1,waiting.findIndex(x=>x.session_id===s.session_id)+1);
   return {ok:true,session:{
-    session_id:s.session_id,status:s.status,result:s.result||'',remarks:s.remarks||''
+    session_id:s.session_id,status:s.status,result:s.result||'',remarks:s.remarks||'',meet_url:resolveStoredMeet_(s)
   },queue_position:String(s.status)==='WAITING_AGENT'?pos:0};
 }
 function authorizeLiveParticipant_(p) {
@@ -982,7 +1147,7 @@ function agentLiveKycQueue_(p) {
       const pan=String(k.pan||'');
       return {
         session_id:s.session_id,customer_id:s.customer_id,full_name:c.full_name||'',email:c.email||'',
-        status:s.status,pan_masked:pan?('*****'+pan.slice(-4)):'',wait_minutes:Math.max(0,Math.floor((nowMs-new Date(s.created_at).getTime())/60000))
+        status:s.status,pan_masked:pan?('PAN ****'+pan.slice(-4)):'',aadhaar_masked:k.aadhaar_masked||'',wait_minutes:Math.max(0,Math.floor((nowMs-new Date(s.created_at).getTime())/60000))
       };
     });
   return {ok:true,sessions};
@@ -1004,13 +1169,63 @@ function agentAcceptLiveKyc_(p) {
   const k=getRows_(TABS.KYC).find(x=>x.customer_id===s.customer_id)||{};
   const consent=getRows_(TABS.CONSENTS).filter(x=>x.customer_id===s.customer_id).slice(-1)[0]||{};
   const pan=String(k.pan||'');
+  const documents=safeCustomerDocs_(s.customer_id,true);
   audit_(admin.admin_id,admin.role,'LIVE_KYC_ACCEPT','CUSTOMER',s.customer_id,'SUCCESS',s.session_id);
   return {ok:true,customer:{
     customer_id:s.customer_id,full_name:c.full_name||'',email:c.email||'',mobile:c.mobile||'',
-    pan_masked:pan?('*****'+pan.slice(-4)):'',dob:k.dob||'',address:k.address||'',
+    pan_masked:pan?('PAN ****'+pan.slice(-4)):'',aadhaar_masked:k.aadhaar_masked||'',dob:k.dob||'',address:k.address||'',
     agreement_version:consent.agreement_version||''
-  }};
+  },documents,meet_url:resolveStoredMeet_(s)};
 }
+
+function resolveStoredMeet_(session) {
+  if(!session)return '';
+  if(session.meet_url)return String(session.meet_url);
+  if(!session.calendar_event_id)return '';
+  try{
+    const ev=Calendar.Events.get('primary',String(session.calendar_event_id));
+    const url=ev.hangoutLink || (((ev.conferenceData||{}).entryPoints||[]).find(x=>x.entryPointType==='video')||{}).uri || '';
+    if(url && session.__row) updateRow_(TABS.KYC_LIVE,session.__row,{meet_url:url,status:'MEET_READY'});
+    return url;
+  }catch(_){return '';}
+}
+function grantAgentDocAccess_(customerId,email) {
+  if(!email)return;
+  getRows_(TABS.KYC_DOCS).filter(x=>x.customer_id===customerId && x.file_id).forEach(d=>{try{DriveApp.getFileById(d.file_id).addViewer(email);}catch(_){}});
+}
+function createGoogleMeet_(customer,admin,session) {
+  const start=new Date(Date.now()+60*1000),end=new Date(start.getTime()+30*60*1000);
+  const event={
+    summary:'SARKSH KYC Verification - '+customer.customer_id,
+    description:'Secure KYC verification session for SARKSH customer '+customer.customer_id+'. Do not include identity numbers in the Calendar event.',
+    start:{dateTime:start.toISOString(),timeZone:SARKSH.TIMEZONE},
+    end:{dateTime:end.toISOString(),timeZone:SARKSH.TIMEZONE},
+    attendees:[{email:String(customer.email)},{email:String(admin.email)}],
+    conferenceData:{createRequest:{requestId:Utilities.getUuid(),conferenceSolutionKey:{type:'hangoutsMeet'}}}
+  };
+  let created=Calendar.Events.insert(event,'primary',{conferenceDataVersion:1,sendUpdates:'all'});
+  let url=created.hangoutLink || (((created.conferenceData||{}).entryPoints||[]).find(x=>x.entryPointType==='video')||{}).uri || '';
+  for(let i=0;!url && i<4;i++){Utilities.sleep(700);created=Calendar.Events.get('primary',created.id);url=created.hangoutLink || (((created.conferenceData||{}).entryPoints||[]).find(x=>x.entryPointType==='video')||{}).uri || '';}
+  return {event_id:created.id,meet_url:url,start:start.toISOString(),end:end.toISOString()};
+}
+function agentCreateMeetKyc_(p) {
+  const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
+  const s=getRows_(TABS.KYC_LIVE).find(x=>x.session_id===String(p.session_id||''));
+  if(!s)throw new Error('Live KYC session not found.');
+  if(s.assigned_agent_id && s.assigned_agent_id!==admin.admin_id && admin.role!=='SUPER_ADMIN')throw new Error('Session is assigned to another agent.');
+  const customer=getRows_(TABS.CUSTOMERS).find(x=>x.customer_id===s.customer_id);if(!customer)throw new Error('Customer not found.');
+  const existing=resolveStoredMeet_(s);if(existing)return {ok:true,meet_url:existing};
+  updateRow_(TABS.KYC_LIVE,s.__row,{assigned_agent_id:admin.admin_id,status:'MEET_PENDING',accepted_at:s.accepted_at||now_()});
+  grantAgentDocAccess_(s.customer_id,admin.email);
+  const meet=createGoogleMeet_(customer,admin,s);
+  updateRow_(TABS.KYC_LIVE,s.__row,{meet_url:meet.meet_url,calendar_event_id:meet.event_id,scheduled_start:meet.start,scheduled_end:meet.end,meet_created_at:now_(),status:meet.meet_url?'MEET_READY':'MEET_PENDING'});
+  if(meet.meet_url){
+    try{MailApp.sendEmail({to:customer.email,subject:'SARKSH KYC Google Meet is ready',htmlBody:'<p>Your SARKSH live KYC verification is ready.</p><p><a href="'+meet.meet_url+'">Join Google Meet</a></p><p>Customer reference: '+customer.customer_id+'</p>'});}catch(_){}
+  }
+  audit_(admin.admin_id,admin.role,'KYC_MEET_CREATE','CUSTOMER',s.customer_id,'SUCCESS',meet.event_id);
+  return {ok:true,meet_url:meet.meet_url,event_id:meet.event_id};
+}
+
 function agentMarkLiveKycConnected_(p) {
   const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN','KYC_ADMIN','KYC_AGENT']);
   const s=getRows_(TABS.KYC_LIVE).find(x=>x.session_id===String(p.session_id||''));
@@ -1270,6 +1485,18 @@ function adminAgreementSave_(p) {
   audit_(admin.admin_id,admin.role,'AGREEMENT_PUBLISH','SETTINGS','registration_agreement','SUCCESS',
     JSON.stringify({title:a.title,version:a.version,hash:a.hash,ready:a.ready}));
   return {ok:true,hash:a.hash,ready:a.ready};
+}
+
+
+function adminAssignCustomerTeam_(p) {
+  const admin=requireAdmin_(p.token,['SUPER_ADMIN','OPERATIONS_ADMIN']);
+  const customerId=String(p.customer_id||'').trim();
+  if(!getRows_(TABS.CUSTOMERS).some(x=>x.customer_id===customerId))throw new Error('Customer not found.');
+  const name=String(p.member_name||'').trim(),role=String(p.role||'').trim();
+  if(!name||!role)throw new Error('Team member name and role are required.');
+  appendRow_(TABS.CUSTOMER_TEAM,{assignment_id:makeId_('TEAM'),customer_id:customerId,member_name:name,role,email:normalizeEmail_(p.email),phone:String(p.phone||''),status:'ACTIVE',assigned_at:now_(),assigned_by:admin.admin_id});
+  audit_(admin.admin_id,admin.role,'CUSTOMER_TEAM_ASSIGN','CUSTOMER',customerId,'SUCCESS',role+': '+name);
+  return {ok:true};
 }
 
 /* =========================================================

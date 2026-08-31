@@ -13,11 +13,7 @@
   <div class="app-shell">
     <aside class="sidebar">
       <a class="side-brand" href="dashboard.html"><img src="assets/logo/sarksh-logo-web.png" alt="SARKSH" /><span>SARKSH</span></a>
-      <nav>
-        <a class="active" href="dashboard.html">Overview</a>
-        <a href="trades.html">Trades</a>
-        <a href="kyc.html">Verification Status</a>
-      </nav>
+      <nav><a class="active" href="dashboard.html">Overview</a><a href="trades.html">Trades</a><a href="kyc.html">KYC & Documents</a><a href="team.html">My Team</a><a href="settings.html">Account Settings</a></nav>
       <div class="side-bottom">
         <button class="btn ghost full" data-logout>Sign Out</button>
       </div>
@@ -41,7 +37,7 @@
           <div class="panel-head"><div><p class="eyebrow">PERFORMANCE</p><h2>Account movement</h2></div><span class="muted">Last 30 recorded days</span></div>
           <canvas id="performanceChart" height="120"></canvas>
         </article>
-        <article class="panel">
+        <article class="panel" id="tradeQualityPanel">
           <div class="panel-head"><div><p class="eyebrow">TRADE QUALITY</p><h2>Win / Loss</h2></div></div>
           <div class="ring-wrap"><div id="winRing" class="ring"><span id="winRate">—</span></div></div>
           <div class="mini-stats"><span>Winning <b id="winningTrades">—</b></span><span>Losing <b id="losingTrades">—</b></span></div>
@@ -55,5 +51,5 @@
     </main>
   </div>
   
-  <script src="js/app.js?v=5.0.0"></script>
+  <script src="js/app.js?v=6.0.0"></script>
 </body></html>

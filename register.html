@@ -1,124 +1,66 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="theme-color" content="#005d3b" />
-  <meta name="description" content="SARKSH secure customer onboarding and live KYC." />
-  <meta name="robots" content="noindex,nofollow" />
-  <title>Register & Live Verify | SARKSH</title>
-  <link rel="icon" type="image/png" href="assets/logo/sarksh-logo-web.png" />
-  <link rel="stylesheet" href="css/app.css" />
-</head>
-<body>
-  <main class="onboarding-shell">
-    <header class="onboarding-header">
-      <a class="onboarding-brand" href="index.html">
-        <img src="assets/logo/sarksh-logo-web.png" alt="SARKSH" />
-        <div><b>SARKSH</b><span>Secure Customer Onboarding</span></div>
-      </a>
-      <a class="btn ghost" href="login.html">Existing customer login</a>
-    </header>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#005d3b"/><meta name="robots" content="noindex,nofollow"/>
+<title>Register & Verify | SARKSH</title>
+<link rel="icon" type="image/png" href="assets/logo/sarksh-logo-web.png"/><link rel="stylesheet" href="css/app.css"/>
+</head><body><main class="onboarding-shell">
+<header class="onboarding-header"><a class="onboarding-brand" href="index.html"><img src="assets/logo/sarksh-logo-web.png" alt="SARKSH"/><div><b>SARKSH</b><span>Secure Customer Onboarding</span></div></a><a class="btn ghost" href="login.html">Existing customer login</a></header>
 
-    <section class="onboarding-hero">
-      <p class="eyebrow">REGISTRATION + LIVE KYC</p>
-      <h1>Register once. Verify live with a SARKSH agent.</h1>
-      <p>Your account details, KYC information and agreement acceptance are submitted first. You then enter a secure waiting room until an authorised verification agent joins the live call.</p>
-      <div class="onboarding-progress">
-        <span class="active">1 Account</span><i></i><span class="active">2 KYC</span><i></i><span class="active">3 Agreement</span><i></i><span>4 Live Agent</span>
-      </div>
-    </section>
+<section class="onboarding-hero">
+<p class="eyebrow">REGISTRATION + KYC + GOOGLE MEET</p><h1>Complete KYC once, then verify live with an authorised SARKSH agent.</h1>
+<p>Registration includes identity details, Aadhaar/document verification, agreement acceptance, secure document upload and a live Google Meet verification.</p>
+<div class="onboarding-progress"><span class="active">1 Account</span><i></i><span class="active">2 KYC</span><i></i><span class="active">3 Documents</span><i></i><span>4 Google Meet</span></div>
+</section>
 
-    <section class="onboarding-grid">
-      <article class="panel">
-        <p class="eyebrow">ACCOUNT + IDENTITY</p>
-        <h2>Customer information</h2>
-        <form id="registerForm" class="stack">
-          <div class="grid2">
-            <label>Full legal name<input name="full_name" required autocomplete="name" /></label>
-            <label>Mobile number<input name="mobile" required inputmode="numeric" pattern="[0-9]{10,15}" /></label>
-          </div>
-          <label>Email address<input name="email" type="email" required autocomplete="email" /></label>
-          <div class="grid2">
-            <label>Password<input name="password" type="password" minlength="8" required autocomplete="new-password" /></label>
-            <label>Confirm password<input name="confirm_password" type="password" minlength="8" required autocomplete="new-password" /></label>
-          </div>
+<section class="onboarding-grid">
+<article class="panel">
+<p class="eyebrow">ACCOUNT + IDENTITY</p><h2>Customer information</h2>
+<form id="registerForm" class="stack">
+<div class="grid2"><label>Full legal name<input name="full_name" required autocomplete="name"/></label><label>Mobile number<input name="mobile" required inputmode="numeric" pattern="[0-9]{10,15}"/></label></div>
+<label>Email address<input name="email" type="email" required autocomplete="email"/></label>
+<div class="grid2"><label>Password<input name="password" type="password" minlength="8" required autocomplete="new-password"/></label><label>Confirm password<input name="confirm_password" type="password" minlength="8" required autocomplete="new-password"/></label></div>
+<div class="section-rule"></div><p class="eyebrow">KYC DETAILS</p>
+<div class="grid2"><label>PAN<input name="pan" maxlength="10" required placeholder="ABCDE1234F"/></label><label>Date of birth<input name="dob" type="date" required/></label></div>
+<label>Residential address<textarea name="address" rows="4" required></textarea></label>
+<label>Aadhaar number <span class="muted">(optional if Aadhaar document is uploaded in the next step)</span>
+<input name="aadhaar_number" inputmode="numeric" maxlength="12" autocomplete="off" placeholder="12-digit Aadhaar"/></label>
+<p class="field-help">If entered, the full Aadhaar number is processed transiently and is not returned to the browser. The backend retains a masked reference and keyed verification hash.</p>
+<label>Identity document reference / last 4 digits<input name="identity_ref" maxlength="32"/></label>
 
-          <div class="section-rule"></div>
-          <p class="eyebrow">KYC DETAILS</p>
-          <div class="grid2">
-            <label>PAN<input name="pan" maxlength="10" required placeholder="ABCDE1234F" /></label>
-            <label>Date of birth<input name="dob" type="date" required /></label>
-          </div>
-          <label>Residential address<textarea name="address" rows="4" required></textarea></label>
-          <label>Identity document reference / last 4 digits
-            <input name="identity_ref" maxlength="32" required />
-          </label>
+<div class="section-rule"></div><p class="eyebrow">AGREEMENT ACCEPTANCE</p>
+<div id="agreementState" class="security-callout"><b>Loading current agreement…</b><p>The governing agreement is loaded from the private backend.</p></div>
+<div id="agreementBox" class="agreement-box" tabindex="0"></div>
+<input type="hidden" name="agreement_hash" id="agreementHash"/><input type="hidden" name="agreement_version" id="agreementVersion"/>
+<label>Type your full legal name to acknowledge the agreement<input name="accepted_name" required autocomplete="name"/></label>
+<label class="checkbox"><input name="agreement_consent" type="checkbox" required/><span>I have read and accept the displayed agreement and consent to KYC/document processing.</span></label>
+<button id="beginRegistration" class="btn primary full" type="submit" disabled>Continue to Document Verification</button>
+</form><div id="message" class="form-message"></div>
+</article>
 
-          <div class="section-rule"></div>
-          <p class="eyebrow">AGREEMENT ACCEPTANCE</p>
-          <div id="agreementState" class="security-callout">
-            <b>Loading current agreement…</b>
-            <p>The governing document is loaded from the private SARKSH backend.</p>
-          </div>
-          <div id="agreementBox" class="agreement-box" tabindex="0" aria-label="Agreement document"></div>
-          <input type="hidden" name="agreement_hash" id="agreementHash" />
-          <input type="hidden" name="agreement_version" id="agreementVersion" />
+<article class="panel video-onboarding-panel" id="registrationVerifyPanel">
+<p class="eyebrow">DOCUMENTS + LIVE KYC</p><h2>Verification center</h2>
+<div id="registrationLocked" class="video-lock"><b>Verification locked</b><span>Complete account, KYC and agreement details first.</span></div>
 
-          <label>Type your full legal name to acknowledge the agreement
-            <input name="accepted_name" required autocomplete="name" />
-          </label>
-          <label class="checkbox">
-            <input name="agreement_consent" type="checkbox" required />
-            <span>I confirm that I have read the displayed agreement and agree to its terms, and I consent to the secure processing of my submitted KYC information.</span>
-          </label>
+<div id="registrationVerificationArea" hidden>
+<div class="security-callout"><b id="registrationCustomerRef">Customer reference</b><p>Upload the required documents before joining the live verification queue.</p></div>
+<form id="registrationDocumentsForm" class="stack">
+<label>PAN Card <span class="required-text">Required</span><input name="pan_document" type="file" accept=".pdf,image/jpeg,image/png" required/></label>
+<label>Aadhaar / Identity Document <span class="muted">Required if Aadhaar number was not entered</span><input name="aadhaar_document" type="file" accept=".pdf,image/jpeg,image/png"/></label>
+<label>Address Proof <span class="muted">Recommended</span><input name="address_document" type="file" accept=".pdf,image/jpeg,image/png"/></label>
+<button id="uploadRegistrationDocs" class="btn primary" type="submit">Upload KYC Documents</button>
+</form>
+<div id="registrationDocsMessage" class="form-message"></div>
+<div id="registrationDocStatus" class="document-list"></div>
 
-          <button id="beginRegistration" class="btn primary full" type="submit" disabled>
-            Submit & Enter Live Verification
-          </button>
-        </form>
-        <div id="message" class="form-message" aria-live="polite"></div>
-      </article>
-
-      <article class="panel video-onboarding-panel" id="liveKycPanel">
-        <p class="eyebrow">LIVE VIDEO VERIFICATION</p>
-        <h2>Verification waiting room</h2>
-        <p class="muted">After your registration details are accepted, start your camera and join the queue. Keep this page open while a verification agent connects.</p>
-
-        <div id="videoLocked" class="video-lock">
-          <b>Live verification locked</b>
-          <span>Complete registration, KYC and agreement acceptance first.</span>
-        </div>
-
-        <div class="live-video-grid">
-          <div>
-            <span class="video-label">You</span>
-            <video id="customerLocalVideo" class="video-box" autoplay muted playsinline></video>
-          </div>
-          <div>
-            <span class="video-label">SARKSH verification agent</span>
-            <video id="customerRemoteVideo" class="video-box remote-video" autoplay playsinline></video>
-          </div>
-        </div>
-
-        <div id="liveKycStatus" class="waiting-card">
-          <div class="waiting-dot"></div>
-          <div><b>Not in queue</b><span>Submit the form to continue.</span></div>
-        </div>
-
-        <div class="button-row">
-          <button id="joinLiveKyc" class="btn primary" type="button" disabled>Start Camera & Join Queue</button>
-          <button id="leaveLiveKyc" class="btn ghost" type="button" disabled>Leave Call</button>
-        </div>
-        <div id="videoMessage" class="form-message" aria-live="polite"></div>
-
-        <div class="security-callout">
-          <b>Live call architecture</b>
-          <p>The video stream is peer-to-peer through WebRTC. Google Apps Script is used only for authentication, the waiting queue and WebRTC signalling. The call is not recorded by this V5 build.</p>
-        </div>
-      </article>
-    </section>
-  </main>
-  <script src="js/app.js?v=5.0.0"></script>
-</body>
-</html>
+<div class="section-rule"></div>
+<div id="liveKycStatus" class="waiting-card"><div class="waiting-dot"></div><div><b>Not in verification queue</b><span>Upload KYC documents first.</span></div></div>
+<div class="button-row">
+<button id="joinMeetKycQueue" class="btn secondary" type="button" disabled>Join KYC Agent Queue</button>
+<a id="registrationMeetLink" class="btn primary" href="#" target="_blank" rel="noopener" hidden>Join Google Meet</a>
+</div>
+<p class="muted">Keep this page open. When a KYC agent accepts the request, a Google Meet link will appear here and a Calendar invitation will be sent to your email.</p>
+</div>
+</article>
+</section>
+</main><script src="js/app.js?v=6.0.0"></script></body></html>

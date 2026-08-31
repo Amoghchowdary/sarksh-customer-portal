@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#005d3b"/><meta name="robots" content="noindex,nofollow"/>
+<title>Account Settings | SARKSH</title>
+<link rel="icon" type="image/png" href="assets/logo/sarksh-logo-web.png"/><link rel="stylesheet" href="css/app.css"/>
+</head><body><div class="app-shell">
+<aside class="sidebar"><a class="side-brand" href="dashboard.html"><img src="assets/logo/sarksh-logo-web.png" alt="SARKSH"/><span>SARKSH</span></a>
+<nav><a href="dashboard.html">Overview</a><a href="trades.html">Trades</a><a href="kyc.html">KYC & Documents</a><a href="team.html">My Team</a><a class="active" href="settings.html">Account Settings</a></nav><div class="side-bottom"><button class="btn ghost full" data-logout>Sign Out</button></div></aside>
+<main class="main">
+<header class="topbar"><button class="menu-btn" data-menu>☰</button><div><p class="eyebrow">CUSTOMER PORTAL</p><h1>Account Settings</h1></div><span id="settingsAccountStatus" class="status-pill">Loading</span></header>
+
+<section class="content-grid">
+<article class="panel span2">
+<p class="eyebrow">PROFILE</p><h2>Personal & contact details</h2>
+<form id="customerSettingsForm" class="stack">
+<div class="grid2"><label>Full legal name<input id="settingsFullName" disabled/></label><label>Email<input id="settingsEmail" disabled/></label></div>
+<div class="grid2"><label>Preferred display name<input name="preferred_name" maxlength="60"/></label><label>Mobile number<input name="mobile" inputmode="numeric" pattern="[0-9]{10,15}" required/></label></div>
+<label>Residential address<textarea name="address" rows="4"></textarea></label>
+<div class="section-rule"></div>
+<p class="eyebrow">DASHBOARD & COMMUNICATIONS</p>
+<label class="checkbox"><input name="email_notifications" type="checkbox"/><span>Email me important account and KYC status updates.</span></label>
+<label class="checkbox"><input name="trade_notifications" type="checkbox"/><span>Email me when a new trade is recorded on my account.</span></label>
+<label class="checkbox"><input name="compact_dashboard" type="checkbox"/><span>Use compact dashboard spacing.</span></label>
+<label class="checkbox"><input name="show_trade_quality" type="checkbox"/><span>Show the Win / Loss widget on my dashboard.</span></label>
+<button class="btn primary" type="submit">Save Settings</button>
+</form><div id="settingsMessage" class="form-message"></div>
+</article>
+
+<article class="panel">
+<p class="eyebrow">SECURITY</p><h2>Change password</h2>
+<form id="changePasswordForm" class="stack">
+<label>Current password<input name="current_password" type="password" required autocomplete="current-password"/></label>
+<label>New password<input name="new_password" type="password" minlength="8" required autocomplete="new-password"/></label>
+<label>Confirm new password<input name="confirm_password" type="password" minlength="8" required autocomplete="new-password"/></label>
+<button class="btn secondary" type="submit">Change Password</button>
+</form><div id="passwordMessage" class="form-message"></div>
+<div class="security-callout"><b>Account security</b><p>Changing your password revokes other customer sessions and keeps only the new sign-in path available.</p></div>
+</article>
+</section>
+</main></div><script src="js/app.js?v=6.0.0"></script></body></html>

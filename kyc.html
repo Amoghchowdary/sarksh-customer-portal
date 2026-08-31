@@ -1,46 +1,56 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="theme-color" content="#005d3b" />
-  <meta name="description" content="SARKSH secure customer and administration portal." />
-  <title>KYC & Verification | SARKSH</title>
-  <link rel="icon" type="image/png" href="assets/logo/sarksh-logo-web.png" />
-  <link rel="stylesheet" href="css/app.css" />
-</head>
-<body>
-<div class="app-shell">
-  <aside class="sidebar">
-    <a class="side-brand" href="dashboard.html"><img src="assets/logo/sarksh-logo-web.png" alt="SARKSH" /><span>SARKSH</span></a>
-    <nav><a href="dashboard.html">Overview</a><a href="trades.html">Trades</a><a class="active" href="kyc.html">Verification Status</a></nav>
-    <div class="side-bottom"><button class="btn ghost full" data-logout>Sign Out</button></div>
-  </aside>
-  <main class="main">
-    <header class="topbar"><button class="menu-btn" data-menu>☰</button><div><p class="eyebrow">CUSTOMER PORTAL</p><h1>Verification Status</h1></div><span id="kycStatus" class="status-pill">Loading</span></header>
-    <section class="content-grid">
-      <article class="panel">
-        <p class="eyebrow">IDENTITY DETAILS</p><h2>Customer information</h2>
-        <form id="kycForm" class="stack">
-          <label>PAN<input name="pan" maxlength="10" placeholder="ABCDE1234F" /></label>
-          <label>Date of birth<input name="dob" type="date" /></label>
-          <label>Address<textarea name="address" rows="4"></textarea></label>
-          <label>Identity document reference / last 4 digits<input name="identity_ref" maxlength="32" /></label>
-          <label class="checkbox"><input name="kyc_consent" type="checkbox" required /> <span>I consent to verification and secure processing of the submitted information.</span></label>
-          <button class="btn primary" type="submit">Submit KYC Details</button>
-        </form>
-        <div id="message" class="form-message" aria-live="polite"></div>
-      </article>
-      <article class="panel">
-        <p class="eyebrow">VIDEO VERIFICATION</p><h2>Secure video capture</h2>
-        <p class="muted">Emergency MVP: record a short verification clip. Production deployment should move video storage to private cloud object storage with signed uploads.</p>
-        <video id="preview" class="video-box" autoplay muted playsinline></video>
-        <div class="button-row"><button id="startCamera" class="btn secondary">Start Camera</button><button id="recordVideo" class="btn primary" disabled>Record 15s</button></div>
-        <div id="videoMessage" class="form-message" aria-live="polite"></div>
-      </article>
-    </section>
-  </main>
-</div>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#005d3b"/><meta name="robots" content="noindex,nofollow"/>
+<title>KYC & Documents | SARKSH</title>
+<link rel="icon" type="image/png" href="assets/logo/sarksh-logo-web.png"/><link rel="stylesheet" href="css/app.css"/>
+</head><body><div class="app-shell">
+<aside class="sidebar"><a class="side-brand" href="dashboard.html"><img src="assets/logo/sarksh-logo-web.png" alt="SARKSH"/><span>SARKSH</span></a>
+<nav><a href="dashboard.html">Overview</a><a href="trades.html">Trades</a><a class="active" href="kyc.html">KYC & Documents</a><a href="team.html">My Team</a><a href="settings.html">Account Settings</a></nav><div class="side-bottom"><button class="btn ghost full" data-logout>Sign Out</button></div></aside>
+<main class="main">
+<header class="topbar"><button class="menu-btn" data-menu>☰</button><div><p class="eyebrow">CUSTOMER PORTAL</p><h1>KYC & Document Center</h1></div><span id="kycStatus" class="status-pill">Loading</span></header>
 
-  <script src="js/app.js?v=5.0.0"></script>
-</body></html>
+<section class="content-grid">
+<article class="panel">
+<p class="eyebrow">IDENTITY PROFILE</p><h2>KYC information</h2>
+<form id="kycForm" class="stack">
+<label>PAN<input name="pan" maxlength="10" placeholder="ABCDE1234F"/></label>
+<div class="grid2"><label>Date of birth<input name="dob" type="date"/></label><label>Aadhaar status<input id="aadhaarMasked" disabled placeholder="Not provided"/></label></div>
+<label>Residential address<textarea name="address" rows="4"></textarea></label>
+<label>Identity reference / last 4 digits<input name="identity_ref" maxlength="32"/></label>
+<label>Aadhaar number (optional when Aadhaar document is uploaded)
+<input name="aadhaar_number" inputmode="numeric" maxlength="12" autocomplete="off" placeholder="12-digit Aadhaar"/></label>
+<p class="field-help">For privacy, the portal does not return or display the full Aadhaar number after submission. The backend stores only a masked reference and a keyed verification hash.</p>
+<label class="checkbox"><input name="kyc_consent" type="checkbox" required/><span>I consent to secure identity verification and KYC document processing.</span></label>
+<button class="btn primary" type="submit">Update KYC Information</button>
+</form><div id="message" class="form-message"></div>
+</article>
+
+<article class="panel span2">
+<div class="panel-head"><div><p class="eyebrow">PRIVATE DOCUMENT VAULT</p><h2>KYC documents</h2></div></div>
+<div class="document-upload-grid">
+<form id="customerDocumentForm" class="stack">
+<label>Document type<select name="document_type" required>
+<option value="PAN_CARD">PAN Card</option><option value="AADHAAR">Aadhaar / Identity Document</option>
+<option value="ADDRESS_PROOF">Address Proof</option><option value="PHOTO">Photo</option><option value="OTHER">Other KYC Document</option>
+</select></label>
+<label>Select PDF/JPG/PNG<input name="document" type="file" accept=".pdf,image/jpeg,image/png" required/></label>
+<label>Reference / notes<input name="reference" maxlength="80" placeholder="Optional masked reference"/></label>
+<button class="btn primary" type="submit">Upload Securely</button>
+</form>
+<div><h3>Uploaded documents</h3><div id="customerDocuments" class="document-list"><div class="alert">Loading documents…</div></div></div>
+</div>
+<div id="documentMessage" class="form-message"></div>
+</article>
+</section>
+
+<section class="panel">
+<div class="panel-head"><div><p class="eyebrow">LIVE VERIFICATION</p><h2>Google Meet with KYC agent</h2></div><span id="customerMeetPill" class="status-pill">Checking</span></div>
+<div id="customerMeetStatus" class="meet-status-box">Checking live verification status…</div>
+<div class="button-row">
+<button id="requestMeetKyc" class="btn secondary" type="button">Request Live KYC</button>
+<a id="joinCustomerMeet" class="btn primary" href="#" target="_blank" rel="noopener" hidden>Join Google Meet</a>
+</div>
+<p class="muted">When an authorised KYC agent creates the verification meeting, the Meet link appears here and is also sent through Google Calendar/email.</p>
+</section>
+</main></div><script src="js/app.js?v=6.0.0"></script></body></html>

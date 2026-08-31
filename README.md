@@ -1,100 +1,96 @@
-# SARKSH Customer + Admin Portal V5 — Live Agent KYC
+# SARKSH Customer + Admin Portal V6
 
-## Existing database preservation
+## V6 focus
 
-This release is designed for the **existing V3/V4 Apps Script project and existing Google Sheet database**.
+V6 upgrades both customer experience and KYC operations.
 
-Two existing live customers are not recreated, cleared, moved, or re-imported.
+Customer portal now includes:
+- Overview
+- Trades
+- KYC & Document Center
+- My SARKSH Team
+- Account Settings
+- Password change
+- Dashboard preferences
+- Notification preferences
 
-Run this function before the V5 deployment:
+KYC now includes:
+- PAN
+- DOB/address
+- Aadhaar number OR Aadhaar document
+- Private KYC document upload to Google Drive
+- PAN/Aadhaar/address-proof document types
+- Google Meet live agent verification
 
-`migrateV3DatabaseToV5()`
+## Aadhaar handling
 
-It performs this sequence:
+The frontend accepts a 12-digit Aadhaar number when the customer chooses that route.
 
-1. Reads the existing `SARKSH_SHEET_ID` Script Property.
-2. Opens the existing production Google Sheet.
-3. Creates a timestamped Drive copy of that database.
-4. Adds only missing V5 columns/tabs.
-5. Preserves existing USERS, CUSTOMERS, TRADES, ACCOUNTS, LEDGER and KYC rows.
-6. Adds the live-KYC tables and KYC_AGENT role.
+The backend does **not** return the full number after submission. It stores:
+- masked reference, e.g. `XXXX-XXXX-1234`
+- keyed HMAC verification value
+- mode (`NUMBER`)
 
-New V5 tables:
-- `19_KYC_LIVE_SESSIONS`
-- `20_KYC_SIGNAL`
+The pepper is stored in Apps Script Script Properties, not GitHub.
 
-The migration is additive. Do **not** create a new Apps Script project if you want the current database to remain connected. Paste V5 `Code.gs` into the same Apps Script project that currently owns the live V3 database.
+Alternatively, the customer can upload the Aadhaar/identity document to the private KYC Drive vault.
 
-## Live KYC workflow
+## Google Meet KYC
 
-New customer registration:
-
-Account + KYC + Agreement
-        ↓
-Camera permission
-        ↓
-Join live verification queue
-        ↓
-WAITING_AGENT
-        ↓
-Authorised SARKSH agent accepts
-        ↓
-Embedded WebRTC customer ↔ agent call
-        ↓
-Agent chooses:
-VERIFIED / RESUBMIT / REJECTED
-        ↓
-Only VERIFIED activates the customer login/account
-
-## Media architecture
-
-Video/audio media uses WebRTC peer-to-peer transport.
-
-Apps Script + Google Sheets handle only:
-- authentication
-- queue
-- agent assignment
-- SDP/ICE signalling
-- final verification result
-- audit trail
-
-V5 does not record or store the live call.
-
-## Important network note
-
-The build includes public STUN servers for WebRTC discovery. Some corporate/mobile networks require a TURN relay. For production-grade reliability, configure a controlled TURN/TLS service later. Apps Script itself cannot act as a TURN media relay.
-
-## Admin desk
-
-Live agent queue:
+Agent page:
 
 `/admin/kyc-live.html`
 
-Allowed roles:
-- SUPER_ADMIN
-- OPERATIONS_ADMIN
-- KYC_ADMIN
-- KYC_AGENT
+Workflow:
 
-The existing admin 3FA login remains unchanged.
+Customer joins KYC queue
+-> Agent opens workspace and reviews uploaded documents
+-> Agent clicks `Create Google Meet & Invite`
+-> Apps Script creates a Google Calendar event + Google Meet conference
+-> Customer and agent receive Calendar invitations
+-> Meet link appears in both portals
+-> Agent completes KYC as VERIFIED / RESUBMIT / REJECTED
 
-## Backend deployment
+V6 uses Google Calendar API conferenceData with `conferenceDataVersion=1`.
 
-Your existing Apps Script URL remains configured:
+## Existing customer database preservation
 
+Use the SAME Apps Script project and SAME Script Properties.
+
+Run:
+
+`migrateExistingDatabaseToV6()`
+
+The function creates a timestamped Drive backup, then only adds missing V6 columns/tabs.
+
+Existing customers, trades, ledger, KYC and admin records remain in the same production Sheet.
+
+New tables:
+- `21_CUSTOMER_TEAM`
+- `22_CUSTOMER_SETTINGS`
+
+Existing tables are extended additively:
+- `06_KYC`
+- `07_KYC_DOCUMENTS`
+- `19_KYC_LIVE_SESSIONS`
+
+## Calendar service
+
+V6 `appsscript.json` enables Google Calendar API v3 and adds the calendar.events OAuth scope.
+
+If Apps Script shows `Calendar is not defined`, open Apps Script -> Services (+) -> add **Google Calendar API v3**, authorize it, and redeploy the existing Web App version.
+
+## Deployment
+
+Keep the existing Apps Script `/exec` URL.
+
+1. Paste V6 `Code.gs`
+2. Replace `appsscript.json`
+3. Run `migrateExistingDatabaseToV6()`
+4. Authorize new Calendar permission
+5. Update the EXISTING Apps Script deployment to a new version
+6. Push frontend to `main`
+7. GitHub Actions builds/deploys Pages
+
+Backend already configured:
 https://script.google.com/macros/s/AKfycbzvnPVHqRKhJZO8Qd3vtyF0K5_rYYwYTDWXCBZAZZFAZjqgTsBnx1dux6d2KM0PjYGkNA/exec
-
-After replacing `Code.gs`:
-
-1. Run `migrateV3DatabaseToV5()`
-2. Confirm the Execution log shows the same live database URL and a pre-V5 backup URL.
-3. Deploy a **new version of the existing Web App deployment**.
-4. Keep the existing `/exec` URL.
-
-## GitHub deployment
-
-The repository continues to use:
-
-`.github/workflows/deploy-pages.yml`
-
-Push to `main`; GitHub Actions builds `dist/` and deploys Pages.
