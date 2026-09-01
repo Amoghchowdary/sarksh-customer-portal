@@ -1,74 +1,71 @@
-# SARKSH Customer Portal V10 — OTP Login + Post-Login KYC + Responsive UX
+# SARKSH Portal V11 — Fast Backend + Automatic Google Meet
 
-## Root cause fixed for customer login
-V9 required `01_USERS.status == ACTIVE` for both login and authenticated customer context. Customers with valid pending KYC statuses such as `PENDING_KYC` or `PENDING_LIVE_KYC` were therefore rejected even though they needed portal access to complete KYC.
+## Performance architecture
 
-V10 separates **portal sign-in eligibility** from **KYC/account status**. Allowed customer portal states include ACTIVE and supported pending-verification states. Suspended/disabled accounts remain blocked.
+V11 removes several high-latency patterns from the Apps Script hot path:
 
-## Customer login
-Mandatory two-step sign in:
-1. Email or Customer ID + password
-2. 6-digit OTP sent through native Apps Script MailApp
-3. Customer session created only after OTP succeeds
+- no session `last_seen` Sheet write on every API read
+- direct exact-row lookups for session/user/customer/admin/challenge rows
+- settings mirrored into Script Properties for low-latency reads
+- account financial metrics materialized in `09_ACCOUNTS`
+- trade/ledger writes increment the materialized account metrics
+- customer dashboard reads recent rows in bounded blocks rather than reading full trade/ledger history
+- Admin Accounts and Customers no longer rescan all trades and ledger rows
+- Admin Trades and Audit are bounded to recent records
+- browser boot only initializes the current page
+- customer notification state is reused from the page response, removing a duplicate backend request on most customer pages
+- concurrent identical read requests are coalesced in the browser
 
-OTP controls:
-- 5-minute expiry
-- one-time use
-- hashed OTP storage
-- attempt limit
-- 30-second resend cooldown
-- no direct password-only login route
+### 50–100 ms target
 
-New additive table:
-`23_CUSTOMER_AUTH_CHALLENGES`
+The frontend can render and react in that range on a warm path, but Google Apps Script Web App cold-start/network latency is controlled by Google's runtime and cannot be guaranteed at 50–100 ms end-to-end.
 
-## Registration / KYC pivot
-Registration now collects only:
-- full legal name
-- mobile
-- email
-- password
-- current published agreement acceptance (only when an agreement is active)
+V11 is designed to remove SARKSH-controlled latency and keep normal warm backend work as small as possible. `server_ms` remains in every API response for measurement.
 
-KYC and all document uploads happen **after the customer has logged in**.
+## Automatic Google Meet
 
-Customer KYC flow:
-Identity details -> Private document vault -> Live KYC request -> Agent-published Google Meet link.
+Automatic Meet generation uses the **first-party Google Calendar Advanced Service**, not a third-party vendor.
 
-## Admin Accounts & Ledger
-Customer ID copy/paste is removed. The ledger form uses a searchable-style customer select populated with Customer Name + Customer ID + Current Amount. Clicking a customer balance row also selects that customer for the ledger form.
+Admin flow:
 
-## Responsive UX
-V10 adds:
-- mobile bottom navigation
-- responsive sidebar overlay/drawer
-- clearer labels and helper text
-- larger touch targets
-- mobile/phone/tablet/laptop breakpoints
-- simplified registration
-- three-step KYC layout
-- finite loading/error states
-- password show/hide and OTP stage UX
+Customer requests Live KYC
+→ KYC queue
+→ Agent clicks **Accept & Generate Meet**
+→ Apps Script creates Calendar event with `conferenceData.createRequest`
+→ Google generates `hangoutsMeet`
+→ Calendar invitations go to customer + agent
+→ session becomes `MEET_READY`
+→ customer polling detects the published URL
+→ **Join Google Meet** icon/button appears automatically
 
-## Security settings
-Email OTP is **always on** for customer login. It is not customer-disableable. Customers can change their password and sign out other devices from Account Settings.
+If conference creation is still pending, the Admin workspace exposes **Generate / Retry Meet**.
 
 ## Existing database
-Use the SAME Apps Script project and production Sheet.
+
+Use the same Apps Script project and production Sheet.
 
 Run:
-`migrateExistingDatabaseToV10()`
 
-This creates a PRE-V10 backup and adds only missing schema, including the customer OTP challenge table. Existing customers, trades, ledger, agreements and documents remain preserved.
+`migrateExistingDatabaseToV11()`
 
-## Existing backend
+This:
+- creates the PRE-V11 backup
+- adds the new materialized metric columns to `09_ACCOUNTS`
+- rebuilds account metrics from the existing live trades/ledger
+- preserves existing customers, KYC, trades, ledger, admins and agreements
+
+## Apps Script deployment
+
+Replace:
+- `Code.gs`
+- `appsscript.json`
+
+Run migration and authorize the new Google Calendar permission.
+
+Update the **existing** Web App deployment version. Keep the same `/exec` URL:
+
 https://script.google.com/macros/s/AKfycbzvnPVHqRKhJZO8Qd3vtyF0K5_rYYwYTDWXCBZAZZFAZjqgTsBnx1dux6d2KM0PjYGkNA/exec
 
-## Deployment
-1. Replace `Code.gs`
-2. Replace `appsscript.json`
-3. Run `migrateExistingDatabaseToV10()`
-4. Update the EXISTING Apps Script Web App deployment version
-5. Keep the same `/exec` URL
-6. Push frontend to `main`
-7. GitHub Actions builds and deploys Pages
+## GitHub
+
+Push V11 to `main`; the existing GitHub Actions workflow builds and deploys Pages.
