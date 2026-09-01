@@ -11,7 +11,7 @@
  */
 
 const SARKSH = {
-  VERSION: '9.0.0',
+  VERSION: '10.0.0',
   TIMEZONE: 'Asia/Kolkata',
   SESSION_HOURS: 12,
   PASSWORD_ITERATIONS: 1200,
@@ -51,7 +51,8 @@ const TABS = {
   KYC_LIVE:'19_KYC_LIVE_SESSIONS',
   KYC_SIGNAL:'20_KYC_SIGNAL',
   CUSTOMER_TEAM:'21_CUSTOMER_TEAM',
-  CUSTOMER_PREFS:'22_CUSTOMER_SETTINGS'
+  CUSTOMER_PREFS:'22_CUSTOMER_SETTINGS',
+  CUSTOMER_AUTH:'23_CUSTOMER_AUTH_CHALLENGES'
 };
 
 const HEADERS = {
@@ -76,7 +77,8 @@ const HEADERS = {
   '19_KYC_LIVE_SESSIONS':['session_id','customer_id','user_id','registration_id','status','assigned_agent_id','meet_url','calendar_event_id','scheduled_start','scheduled_end','meet_created_at','created_at','accepted_at','started_at','ended_at','result','remarks'],
   '20_KYC_SIGNAL':['signal_id','session_id','sender','seq','type','payload_json','created_at'],
   '21_CUSTOMER_TEAM':['assignment_id','customer_id','member_name','role','email','phone','status','assigned_at','assigned_by'],
-  '22_CUSTOMER_SETTINGS':['customer_id','preferred_name','email_notifications','trade_notifications','compact_dashboard','show_trade_quality','updated_at']
+  '22_CUSTOMER_SETTINGS':['customer_id','preferred_name','email_notifications','trade_notifications','compact_dashboard','show_trade_quality','updated_at'],
+  '23_CUSTOMER_AUTH_CHALLENGES':['challenge_id','user_id','customer_id','otp_hash','expires_at','attempts','created_at','used','destination_masked']
 };
 
 /* =========================================================
@@ -127,13 +129,13 @@ function setupSarkshPortal() {
  * Makes a Drive copy of the existing database, then performs an additive schema migration.
  * Existing customer rows, trades, ledger entries, sessions and KYC records are never cleared.
  */
-function migrateExistingDatabaseToV9() {
+function migrateExistingDatabaseToV10() {
   const props=PropertiesService.getScriptProperties();
   const sheetId=props.getProperty(SARKSH.PROP_SHEET_ID);
   if(!sheetId) throw new Error('Existing SARKSH database property not found. Do not continue until the V3 Apps Script project is being used.');
 
   const ss=SpreadsheetApp.openById(sheetId);
-  const backupName='SARKSH Portal DB PRE-V9 '+Utilities.formatDate(new Date(),SARKSH.TIMEZONE,'yyyy-MM-dd_HH-mm-ss');
+  const backupName='SARKSH Portal DB PRE-V10 '+Utilities.formatDate(new Date(),SARKSH.TIMEZONE,'yyyy-MM-dd_HH-mm-ss');
   const backup=DriveApp.getFileById(sheetId).makeCopy(backupName);
 
   appendMigrationBackupLog_(backup);
@@ -165,7 +167,7 @@ function appendMigrationBackupLog_(file) {
     const h=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
     const row={
       backup_id:makeId_('BAK'),timestamp:now_(),status:'SUCCESS',
-      reference:file.getId(),detail:'Automatic pre-V9 migration backup'
+      reference:file.getId(),detail:'Automatic pre-V10 migration backup'
     };
     sh.appendRow(h.map(k=>row[k]===undefined?'':row[k]));
   }catch(_){}
@@ -244,7 +246,9 @@ function doPost(e) {
       liveKycStatus: liveKycStatus_,
       liveKycSignalSend: liveKycSignalSend_,
       liveKycSignalPoll: liveKycSignalPoll_,
-      loginCustomer: loginCustomer_,
+      customerLoginStart: customerLoginStart_,
+      customerLoginVerifyOtp: customerLoginVerifyOtp_,
+      customerLoginResendOtp: customerLoginResendOtp_,
       logout: p => logout_(p.token),
       customerDashboard: customerDashboard_,
       customerTrades: customerTrades_,
@@ -255,6 +259,7 @@ function doPost(e) {
       customerSettingsGet: customerSettingsGet_,
       customerSettingsSave: customerSettingsSave_,
       customerChangePassword: customerChangePassword_,
+      customerSignOutOtherSessions: customerSignOutOtherSessions_,
       customerTeam: customerTeam_,
       customerAgreementGet: customerAgreementGet_,
       customerPortalState: customerPortalState_,
@@ -480,14 +485,19 @@ function requireAdmin_(token, allowedRoles) {
   }
   return admin;
 }
+function customerUserCanLogin_(user){
+  if(!user)return false;
+  return ['ACTIVE','PORTAL_ACTIVE','PENDING_KYC','PENDING_LIVE_KYC','PENDING_VIDEO'].includes(String(user.status||'').toUpperCase());
+}
 function customerContext_(token) {
   const s=getSession_(token,'CUSTOMER');
-  const user=getRows_(TABS.USERS).find(x=>x.user_id===s.user_id && String(x.status)==='ACTIVE');
-  if(!user) throw new Error('Customer user not active.');
+  const user=getRows_(TABS.USERS).find(x=>x.user_id===s.user_id);
+  if(!customerUserCanLogin_(user))throw new Error('Customer account access is unavailable.');
   const customer=getRows_(TABS.CUSTOMERS).find(x=>x.customer_id===user.customer_id);
-  if(!customer) throw new Error('Customer profile not found.');
+  if(!customer)throw new Error('Customer profile not found.');
   return {session:s,user,customer};
 }
+
 
 function generateStrongPassword_(length) {
   const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*-_';
@@ -685,70 +695,32 @@ function getRegistrationAgreement_() {
 }
 
 function registerCustomer_(p) {
-  const email=normalizeEmail_(p.email), name=String(p.full_name||'').trim();
-  const mobile=String(p.mobile||'').trim(), password=String(p.password||'');
-  const pan=String(p.pan||'').trim().toUpperCase();
-  const dob=String(p.dob||'').trim(), address=String(p.address||'').trim();
-  const identityRef=String(p.identity_ref||'').trim();
-  const aadhaarRaw=String(p.aadhaar_number||'');
-  const acceptedName=String(p.accepted_name||'').trim();
+  const email=normalizeEmail_(p.email),name=String(p.full_name||'').trim(),mobile=String(p.mobile||'').trim(),password=String(p.password||'');
   const agreement=currentAgreement_();
-
-  if(!agreement.ready) throw new Error('Registration agreement is not active.');
-  if(String(p.agreement_hash||'')!==agreement.hash || String(p.agreement_version||'')!==agreement.version)
-    throw new Error('Agreement version changed. Reload registration and review the current document.');
-  if(p.agreement_consent!==true) throw new Error('Agreement acceptance is required.');
-  if(acceptedName.toLowerCase()!==name.toLowerCase()) throw new Error('Agreement name must match the full legal name.');
-  if(!name) throw new Error('Full legal name is required.');
-  if(!/^\S+@\S+\.\S+$/.test(email)) throw new Error('Valid email is required.');
-  if(!/^\d{10,15}$/.test(mobile)) throw new Error('Valid mobile number is required.');
-  if(password.length<8) throw new Error('Password must be at least 8 characters.');
-  if(!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) throw new Error('PAN format is invalid.');
-  if(!dob || !address || !identityRef) throw new Error('Complete all KYC fields.');
-  if(getRows_(TABS.USERS).some(x=>normalizeEmail_(x.email)===email)) throw new Error('Email is already registered.');
-
-  const customerId=makeId_(SARKSH.CUSTOMER_PREFIX), userId=makeId_('USR'), salt=newSalt_();
-  const aadhaar=aadhaarReference_(aadhaarRaw,customerId);
-  const rawToken=Utilities.base64EncodeWebSafe(
-    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,Utilities.getUuid()+':'+Date.now()+':'+email)
-  ).replace(/=+$/,'');
-  const regId=makeId_('REG'), created=now_();
-
+  if(!name)throw new Error('Full legal name is required.');
+  if(!/^\S+@\S+\.\S+$/.test(email))throw new Error('Enter a valid email address.');
+  if(!/^\d{10,15}$/.test(mobile))throw new Error('Enter a valid mobile number.');
+  if(password.length<8)throw new Error('Password must be at least 8 characters.');
+  if(getRows_(TABS.USERS).some(x=>normalizeEmail_(x.email)===email))throw new Error('An account already exists with this email. Use Customer Login instead.');
+  let acceptedName='';
+  if(agreement.ready){
+    acceptedName=String(p.accepted_name||'').trim();
+    if(String(p.agreement_hash||'')!==agreement.hash||String(p.agreement_version||'')!==agreement.version)throw new Error('The customer agreement changed. Reload the page and review the current version.');
+    if(p.agreement_consent!==true)throw new Error('Please accept the current customer agreement.');
+    if(acceptedName.toLowerCase()!==name.toLowerCase())throw new Error('Agreement name must match your full legal name.');
+  }
+  const customerId=makeId_(SARKSH.CUSTOMER_PREFIX),userId=makeId_('USR'),salt=newSalt_(),created=now_();
   withWriteLock_(()=>{
-    appendRowUnlocked_(TABS.USERS,{
-      user_id:userId,customer_id:customerId,email,password_hash:hashPassword_(password,salt),
-      password_salt:salt,role:'CUSTOMER',status:'PENDING_LIVE_KYC',created_at:created,last_login:''
-    });
-    appendRowUnlocked_(TABS.CUSTOMERS,{
-      customer_id:customerId,full_name:name,mobile,email,dob,pan_ref:'PAN-****'+pan.slice(-4),address,
-      kyc_status:'WAITING_LIVE_KYC',account_status:'REGISTRATION_INCOMPLETE',created_at:created,updated_at:created
-    });
-    appendRowUnlocked_(TABS.KYC,{
-      kyc_id:makeId_('KYC'),customer_id:customerId,pan,dob,address,identity_ref:identityRef,
-      aadhaar_masked:aadhaar.masked,aadhaar_hmac:aadhaar.hmac,aadhaar_ciphertext:'',kms_key_resource:'',aadhaar_hash_key_version:aadhaar.key_version,aadhaar_hash_scheme:aadhaar.scheme,aadhaar_mode:aadhaar.mode,
-      status:'WAITING_LIVE_KYC',submitted_at:created,reviewed_at:'',reviewed_by:'',remarks:'',
-      video_file_id:'',video_view_url:''
-    });
-    appendRowUnlocked_(TABS.ACCOUNTS,{
-      account_id:makeId_('ACC'),customer_id:customerId,status:'PENDING',opening_balance:0,
-      created_at:created,updated_at:created
-    });
-    appendRowUnlocked_(TABS.CONSENTS,{
-      consent_id:makeId_('CON'),customer_id:customerId,agreement_title:agreement.title,
-      agreement_version:agreement.version,agreement_hash:agreement.hash,accepted_name:acceptedName,
-      accepted_at:created,request_id:String(p.request_id||''),user_agent:String(p.user_agent||''),status:'ACCEPTED'
-    });
-    appendRowUnlocked_(TABS.REGISTRATIONS,{
-      registration_id:regId,token_hash:hexDigest_(rawToken),user_id:userId,customer_id:customerId,
-      expires_at:new Date(Date.now()+24*60*60*1000).toISOString(),used:'FALSE',created_at:created,
-      status:'WAITING_LIVE_KYC',live_kyc_session_id:''
-    });
+    appendRowUnlocked_(TABS.USERS,{user_id:userId,customer_id:customerId,email,password_hash:hashPassword_(password,salt),password_salt:salt,role:'CUSTOMER',status:'PENDING_KYC',created_at:created,last_login:''});
+    appendRowUnlocked_(TABS.CUSTOMERS,{customer_id:customerId,full_name:name,mobile,email,dob:'',pan_ref:'',address:'',kyc_status:'NOT_SUBMITTED',account_status:'PENDING_KYC',created_at:created,updated_at:created});
+    appendRowUnlocked_(TABS.KYC,{kyc_id:makeId_('KYC'),customer_id:customerId,pan:'',dob:'',address:'',identity_ref:'',aadhaar_masked:'',aadhaar_hmac:'',aadhaar_ciphertext:'',kms_key_resource:'',aadhaar_hash_key_version:'',aadhaar_hash_scheme:'',aadhaar_mode:'',status:'NOT_SUBMITTED',submitted_at:'',reviewed_at:'',reviewed_by:'',remarks:'',video_file_id:'',video_view_url:''});
+    appendRowUnlocked_(TABS.ACCOUNTS,{account_id:makeId_('ACC'),customer_id:customerId,status:'PENDING_KYC',opening_balance:0,created_at:created,updated_at:created});
+    if(agreement.ready)appendRowUnlocked_(TABS.CONSENTS,{consent_id:makeId_('CON'),customer_id:customerId,agreement_title:agreement.title,agreement_version:agreement.version,agreement_hash:agreement.hash,accepted_name:acceptedName,accepted_at:created,request_id:String(p.request_id||''),user_agent:String(p.user_agent||''),status:'ACCEPTED'});
   });
-
-  audit_(userId,'CUSTOMER','REGISTER_KYC_AGREEMENT','CUSTOMER',customerId,'SUCCESS',
-    JSON.stringify({agreement_version:agreement.version,agreement_hash:agreement.hash}));
-  return {ok:true,customer_id:customerId,registration_token:rawToken};
+  audit_(userId,'CUSTOMER','REGISTER','CUSTOMER',customerId,'SUCCESS',agreement.ready?JSON.stringify({agreement_version:agreement.version,agreement_hash:agreement.hash}):'No active agreement at registration');
+  return {ok:true,customer_id:customerId};
 }
+
 
 
 function decodeBase64Safe_(value) {
@@ -822,20 +794,46 @@ function uploadRegistrationDocument_(p) {
   return {ok:true,file_id:file.getId()};
 }
 
-function loginCustomer_(p) {
-  const identifier=String(p.identifier||'').trim().toLowerCase(), password=String(p.password||'');
-  const user=getRows_(TABS.USERS).find(x =>
-    normalizeEmail_(x.email)===identifier || String(x.customer_id).toLowerCase()===identifier
-  );
-  if(!user || String(user.status)!=='ACTIVE' || hashPassword_(password,user.password_salt)!==String(user.password_hash)) {
-    audit_(identifier,'CUSTOMER','LOGIN','CUSTOMER',identifier,'FAILED','');
-    throw new Error('Invalid login credentials.');
-  }
-  const token=makeSession_(user.user_id,'CUSTOMER');
-  updateRow_(TABS.USERS,user.__row,{last_login:now_()});
-  audit_(user.user_id,'CUSTOMER','LOGIN','CUSTOMER',user.customer_id,'SUCCESS','');
-  return {ok:true,token};
+function createCustomerLoginChallenge_(user){
+  const latest=getRows_(TABS.CUSTOMER_AUTH).filter(x=>x.user_id===user.user_id&&String(x.used)!=='TRUE').sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0];
+  if(latest && Date.now()-new Date(latest.created_at).getTime()<30000)throw new Error('Please wait 30 seconds before requesting another OTP.');
+  const otp=randomOtp_(),challengeId=makeId_('CCH'),expires=new Date(Date.now()+SARKSH.EMAIL_OTP_MINUTES*60000).toISOString(),masked=maskEmail_(user.email);
+  appendRow_(TABS.CUSTOMER_AUTH,{challenge_id:challengeId,user_id:user.user_id,customer_id:user.customer_id,otp_hash:hexDigest_(challengeId+':'+otp+':'+user.user_id),expires_at:expires,attempts:0,created_at:now_(),used:'FALSE',destination_masked:masked});
+  try{MailApp.sendEmail({to:normalizeEmail_(user.email),subject:'Your SARKSH login verification code',htmlBody:'<p>Hello,</p><p>Use this one-time verification code to sign in to your SARKSH customer account:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px">'+otp+'</p><p>This code expires in '+SARKSH.EMAIL_OTP_MINUTES+' minutes and can be used once.</p><p>If you did not try to sign in, you can ignore this email.</p>'});}
+  catch(err){const row=getRows_(TABS.CUSTOMER_AUTH).find(x=>x.challenge_id===challengeId);if(row)updateRow_(TABS.CUSTOMER_AUTH,row.__row,{used:'TRUE'});throw new Error('We could not send the login OTP right now. Please try again shortly.');}
+  return {challenge_id:challengeId,masked_email:masked};
 }
+function customerLoginStart_(p){
+  const identifier=String(p.identifier||'').trim().toLowerCase(),password=String(p.password||'');
+  const user=getRows_(TABS.USERS).find(x=>normalizeEmail_(x.email)===identifier||String(x.customer_id||'').toLowerCase()===identifier);
+  if(!user||!customerUserCanLogin_(user)||hashPassword_(password,user.password_salt)!==String(user.password_hash)){
+    audit_(identifier,'CUSTOMER','LOGIN_PASSWORD','CUSTOMER',identifier,'FAILED','');throw new Error('Email/Customer ID or password is incorrect.');
+  }
+  const challenge=createCustomerLoginChallenge_(user);audit_(user.user_id,'CUSTOMER','LOGIN_PASSWORD','CUSTOMER',user.customer_id,'SUCCESS','OTP sent');
+  return {ok:true,...challenge};
+}
+function customerLoginChallenge_(id){
+  const c=getRows_(TABS.CUSTOMER_AUTH).find(x=>x.challenge_id===String(id||'')&&String(x.used)!=='TRUE');
+  if(!c||new Date(c.expires_at)<=new Date())throw new Error('This verification code has expired. Start sign-in again.');
+  if(Number(c.attempts||0)>=6)throw new Error('Too many incorrect OTP attempts. Start sign-in again.');
+  return c;
+}
+function customerLoginVerifyOtp_(p){
+  const c=customerLoginChallenge_(p.challenge_id),otp=String(p.otp||'').replace(/\D/g,'');
+  const user=getRows_(TABS.USERS).find(x=>x.user_id===c.user_id);if(!customerUserCanLogin_(user))throw new Error('Customer account access is unavailable.');
+  if(otp.length!==6||hexDigest_(c.challenge_id+':'+otp+':'+c.user_id)!==String(c.otp_hash)){updateRow_(TABS.CUSTOMER_AUTH,c.__row,{attempts:Number(c.attempts||0)+1});audit_(c.user_id,'CUSTOMER','LOGIN_OTP','CUSTOMER',c.customer_id,'FAILED','');throw new Error('The verification code is incorrect.');}
+  updateRow_(TABS.CUSTOMER_AUTH,c.__row,{used:'TRUE'});const token=makeSession_(user.user_id,'CUSTOMER');updateRow_(TABS.USERS,user.__row,{last_login:now_()});audit_(user.user_id,'CUSTOMER','LOGIN_OTP','CUSTOMER',user.customer_id,'SUCCESS','');return {ok:true,token};
+}
+function customerLoginResendOtp_(p){
+  const old=customerLoginChallenge_(p.challenge_id),user=getRows_(TABS.USERS).find(x=>x.user_id===old.user_id);if(!customerUserCanLogin_(user))throw new Error('Customer account access is unavailable.');
+  if(Date.now()-new Date(old.created_at).getTime()<30000)throw new Error('Please wait 30 seconds before requesting another OTP.');
+  updateRow_(TABS.CUSTOMER_AUTH,old.__row,{used:'TRUE'});const challenge=createCustomerLoginChallenge_(user);audit_(user.user_id,'CUSTOMER','LOGIN_OTP_RESEND','CUSTOMER',user.customer_id,'SUCCESS','');return {ok:true,...challenge};
+}
+
+function loginCustomer_(p) {
+  throw new Error('Two-step customer login is required. Use the current customer login page.');
+}
+
 
 /* =========================================================
    FINANCIAL CALCULATION
@@ -908,6 +906,7 @@ function requestCustomerMeetKyc_(p) {
   const active=getRows_(TABS.KYC_LIVE).filter(x=>x.customer_id===c.customer_id && ['WAITING_AGENT','AGENT_JOINING','MEET_PENDING','MEET_READY','LIVE'].includes(String(x.status)))[0];
   if(active)return {ok:true,session_id:active.session_id};
   const k=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id)||{};
+  if(!k.pan||!k.dob||!k.address)throw new Error('Complete KYC identity details before requesting live verification.');
   const docs=safeCustomerDocs_(c.customer_id,false);
   if(!docs.some(d=>d.document_type==='PAN_CARD'))throw new Error('Upload PAN Card before requesting live KYC.');
   if(!k.aadhaar_hmac && !docs.some(d=>d.document_type==='AADHAAR'))throw new Error('Provide Aadhaar number or upload Aadhaar document before live KYC.');
@@ -929,27 +928,16 @@ function getKyc_(p) {
 }
 
 function submitKyc_(p) {
-  const ctx=customerContext_(p.token), c=ctx.customer;
-  const pan=String(p.pan||'').toUpperCase().trim();
-  const aadhaar=aadhaarReference_(p.aadhaar_number,c.customer_id);
-  if(pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) throw new Error('PAN format is invalid.');
-
-  const existing=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id);
-  const patch={
-    customer_id:c.customer_id,pan,dob:String(p.dob||''),address:String(p.address||''),
-    identity_ref:String(p.identity_ref||''),aadhaar_masked:aadhaar.masked||existing?.aadhaar_masked||'',aadhaar_hmac:aadhaar.hmac||existing?.aadhaar_hmac||'',aadhaar_ciphertext:'',kms_key_resource:'',aadhaar_hash_key_version:aadhaar.key_version||existing?.aadhaar_hash_key_version||'',aadhaar_hash_scheme:aadhaar.scheme||existing?.aadhaar_hash_scheme||'',aadhaar_mode:aadhaar.mode||existing?.aadhaar_mode||'',status:'PENDING',submitted_at:now_(),
-    reviewed_at:'',reviewed_by:'',remarks:''
-  };
-  if(existing) updateRow_(TABS.KYC,existing.__row,patch);
-  else appendRow_(TABS.KYC,{kyc_id:makeId_('KYC'),...patch,video_file_id:'',video_view_url:''});
-
-  updateRow_(TABS.CUSTOMERS,c.__row,{
-    dob:String(p.dob||''),pan_ref:pan?('PAN-****'+pan.slice(-4)):'',
-    address:String(p.address||''),kyc_status:'PENDING',updated_at:now_()
-  });
-  audit_(ctx.user.user_id,'CUSTOMER','KYC_SUBMIT','CUSTOMER',c.customer_id,'SUCCESS','');
-  return {ok:true};
+  const ctx=customerContext_(p.token),c=ctx.customer;const pan=String(p.pan||'').toUpperCase().trim();
+  if(!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan))throw new Error('Enter a valid PAN in the format ABCDE1234F.');
+  if(!p.dob)throw new Error('Date of birth is required.');if(!String(p.address||'').trim())throw new Error('Residential address is required.');
+  const aadhaar=aadhaarReference_(p.aadhaar_number,c.customer_id),existing=getRows_(TABS.KYC).find(x=>x.customer_id===c.customer_id);
+  const patch={pan,dob:String(p.dob||''),address:String(p.address||''),identity_ref:String(p.identity_ref||''),aadhaar_masked:aadhaar.masked||existing?.aadhaar_masked||'',aadhaar_hmac:aadhaar.hmac||existing?.aadhaar_hmac||'',aadhaar_ciphertext:'',kms_key_resource:'',aadhaar_hash_key_version:aadhaar.key_version||existing?.aadhaar_hash_key_version||'',aadhaar_hash_scheme:aadhaar.scheme||existing?.aadhaar_hash_scheme||'',aadhaar_mode:aadhaar.mode||existing?.aadhaar_mode||'',status:'PENDING_DOCUMENTS',submitted_at:now_(),reviewed_at:'',reviewed_by:'',remarks:''};
+  if(existing)updateRow_(TABS.KYC,existing.__row,patch);else appendRow_(TABS.KYC,{kyc_id:makeId_('KYC'),customer_id:c.customer_id,...patch,video_file_id:'',video_view_url:''});
+  updateRow_(TABS.CUSTOMERS,c.__row,{dob:String(p.dob||''),pan_ref:'PAN-****'+pan.slice(-4),address:String(p.address||''),kyc_status:'PENDING_DOCUMENTS',account_status:c.account_status==='ACTIVE'?'ACTIVE':'PENDING_KYC',updated_at:now_()});
+  audit_(ctx.user.user_id,'CUSTOMER','KYC_DETAILS_SUBMIT','CUSTOMER',c.customer_id,'SUCCESS','');return {ok:true};
 }
+
 
 function uploadKycVideo_(p) {
   const ctx=customerContext_(p.token), c=ctx.customer;
@@ -993,6 +981,11 @@ function customerSettingsSave_(p) {
   if(existing)updateRow_(TABS.CUSTOMER_PREFS,existing.__row,patch);else appendRow_(TABS.CUSTOMER_PREFS,patch);
   audit_(ctx.user.user_id,'CUSTOMER','SETTINGS_UPDATE','CUSTOMER',c.customer_id,'SUCCESS','');
   return {ok:true};
+}
+function customerSignOutOtherSessions_(p){
+  const ctx=customerContext_(p.token);let revoked=0;
+  getRows_(TABS.SESSIONS).filter(x=>x.user_id===ctx.user.user_id&&x.session_id!==ctx.session.session_id&&String(x.revoked)!=='TRUE').forEach(s=>{updateRow_(TABS.SESSIONS,s.__row,{revoked:'TRUE'});revoked++;});
+  audit_(ctx.user.user_id,'CUSTOMER','SIGN_OUT_OTHER_SESSIONS','CUSTOMER',ctx.customer.customer_id,'SUCCESS',String(revoked));return {ok:true,revoked};
 }
 function customerChangePassword_(p) {
   const ctx=customerContext_(p.token),u=ctx.user;

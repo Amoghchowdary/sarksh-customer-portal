@@ -27,15 +27,10 @@
 </form><div id="settingsMessage" class="form-message"></div>
 </article>
 
-<article class="panel">
-<p class="eyebrow">SECURITY</p><h2>Change password</h2>
-<form id="changePasswordForm" class="stack">
-<label>Current password<input name="current_password" type="password" required autocomplete="current-password"/></label>
-<label>New password<input name="new_password" type="password" minlength="8" required autocomplete="new-password"/></label>
-<label>Confirm new password<input name="confirm_password" type="password" minlength="8" required autocomplete="new-password"/></label>
-<button class="btn secondary" type="submit">Change Password</button>
-</form><div id="passwordMessage" class="form-message"></div>
-<div class="security-callout"><b>Account security</b><p>Changing your password revokes other customer sessions and keeps only the new sign-in path available.</p></div>
-</article>
+<article class="panel security-settings-card"><p class="eyebrow">SIGN-IN SECURITY</p><h2>Two-step verification</h2>
+<div class="security-state-row"><div><b>Email OTP protection</b><p>Required on every customer login after your password is verified.</p></div><span class="status-pill success">ALWAYS ON</span></div>
+<div class="security-callout"><b>How sign-in works</b><p>1. Enter email/Customer ID and password. 2. Enter the 6-digit OTP sent to your registered email. 3. Your secure session opens.</p></div>
+<div class="section-rule"></div><h3>Change password</h3><form id="changePasswordForm" class="stack form-friendly"><label><span>Current password</span><input name="current_password" type="password" required autocomplete="current-password"/></label><label><span>New password</span><small>Use at least 8 characters.</small><input name="new_password" type="password" minlength="8" required autocomplete="new-password"/></label><label><span>Confirm new password</span><input name="confirm_password" type="password" minlength="8" required autocomplete="new-password"/></label><button class="btn secondary" type="submit">Change password</button></form><div id="passwordMessage" class="form-message"></div>
+<div class="section-rule"></div><button id="signOutOtherDevices" class="btn ghost" type="button">Sign out other devices</button><div id="securityMessage" class="form-message"></div></article>
 </section>
-</main></div><script src="js/app.js?v=9.0.0"></script></body></html>
+</main></div><script src="js/app.js?v=10.0.0"></script></body></html>

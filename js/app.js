@@ -11,7 +11,7 @@
     BACKEND_URL: "https://script.google.com/macros/s/AKfycbzvnPVHqRKhJZO8Qd3vtyF0K5_rYYwYTDWXCBZAZZFAZjqgTsBnx1dux6d2KM0PjYGkNA/exec",
     APP_NAME: "SARKSH Portal",
     VIDEO_MAX_MB: 3,
-    BUILD: "9.0.0"
+    BUILD: "10.0.0"
   };
 
 
@@ -105,150 +105,59 @@
     return {file_name:file.name,mime_type:file.type,file_base64:data.split(",")[1]||""};
   }
 
+
+  function initCustomerResponsiveNavigation(){
+    if(isAdminPage() || document.body.classList.contains("auth-body") || document.querySelector(".simple-onboarding-shell")) return;
+    const sidebar=document.querySelector(".sidebar"),menu=document.querySelector("[data-menu]");
+    if(sidebar && !document.querySelector(".sidebar-backdrop")){
+      const backdrop=document.createElement("div");backdrop.className="sidebar-backdrop";document.body.appendChild(backdrop);
+      const close=()=>{sidebar.classList.remove("open");backdrop.classList.remove("show");};
+      menu?.addEventListener("click",()=>backdrop.classList.toggle("show",sidebar.classList.contains("open")));
+      backdrop.addEventListener("click",close);sidebar.querySelectorAll("a").forEach(a=>a.addEventListener("click",close));
+    }
+    if(!document.querySelector(".mobile-customer-nav")){
+      const current=location.pathname.split("/").pop()||"dashboard.html";
+      const nav=document.createElement("nav");nav.className="mobile-customer-nav";
+      const items=[["dashboard.html","⌂","Overview"],["trades.html","↕","Trades"],["kyc.html","✓","KYC"],["settings.html","⚙","Settings"]];
+      nav.innerHTML=items.map(([href,icon,label])=>`<a href="${href}" class="${current===href?"active":""}"><b>${icon}</b><span>${label}</span></a>`).join("");
+      document.body.appendChild(nav);
+    }
+  }
+
   // CUSTOMER LOGIN
   async function initCustomerLogin() {
-    const form = $("loginForm"), msg = $("message");
-    if (!form) return;
-    form.addEventListener("submit", async e => {
-      e.preventDefault();
-      const f = new FormData(form);
-      setMessage(msg, "Signing in…");
-      try {
-        const r = await api("loginCustomer", {
-          identifier: f.get("identifier"),
-          password: f.get("password")
-        });
-        Session.setCustomer(r.token);
-        location.href = "dashboard.html";
-      } catch (err) {
-        setMessage(msg, err.message, "error");
-      }
-    });
-    $("forgotPassword")?.addEventListener("click", () => {
-      alert("Password reset is reserved for the next authentication hardening step.");
-    });
+    const form=$("loginForm"),otpForm=$("customerOtpForm"),msg=$("message");if(!form)return;
+    let challengeId="",maskedEmail="",resendTimer=null,resendLeft=0;
+    const submit=$("loginSubmit"),otpStage=$("otpStage"),passwordStage=$("passwordStage"),resend=$("resendCustomerOtp");
+    const startCooldown=()=>{if(resendTimer)clearInterval(resendTimer);resendLeft=30;resend.disabled=true;resend.textContent=`Resend code in ${resendLeft}s`;resendTimer=setInterval(()=>{resendLeft--;if(resendLeft<=0){clearInterval(resendTimer);resendTimer=null;resend.disabled=false;resend.textContent="Resend code";}else resend.textContent=`Resend code in ${resendLeft}s`;},1000);};
+    const showOtp=()=>{passwordStage.hidden=true;otpStage.hidden=false;$("otpHint").textContent=`We sent a 6-digit code to ${maskedEmail}.`;otpForm.otp.value="";setTimeout(()=>otpForm.otp.focus(),80);startCooldown();};
+    form.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(form);submit.disabled=true;setMessage(msg,"Checking your account…");try{const r=await api("customerLoginStart",{identifier:f.get("identifier"),password:f.get("password")});challengeId=r.challenge_id;maskedEmail=r.masked_email||"your registered email";showOtp();setMessage(msg,"Verification code sent.","success");}catch(err){setMessage(msg,err.message,"error");}finally{submit.disabled=false;}});
+    otpForm?.addEventListener("submit",async e=>{e.preventDefault();const otp=String(new FormData(otpForm).get("otp")||"").replace(/\D/g,"");if(otp.length!==6)return setMessage(msg,"Enter the 6-digit verification code.","error");$("verifyOtpButton").disabled=true;setMessage(msg,"Verifying code…");try{const r=await api("customerLoginVerifyOtp",{challenge_id:challengeId,otp});Session.setCustomer(r.token);setMessage(msg,"Sign-in successful. Opening your account…","success");location.href="dashboard.html";}catch(err){setMessage(msg,err.message,"error");$("verifyOtpButton").disabled=false;}});
+    resend?.addEventListener("click",async()=>{if(resend.disabled||!challengeId)return;resend.disabled=true;try{const r=await api("customerLoginResendOtp",{challenge_id:challengeId});challengeId=r.challenge_id;maskedEmail=r.masked_email||maskedEmail;showOtp();setMessage(msg,"A new verification code was sent.","success");}catch(err){setMessage(msg,err.message,"error");resend.disabled=false;}});
+    $("changeCustomerLogin")?.addEventListener("click",()=>{if(resendTimer)clearInterval(resendTimer);challengeId="";otpStage.hidden=true;passwordStage.hidden=false;form.password.value="";setMessage(msg,"");form.identifier.focus();});
+    $("toggleCustomerPassword")?.addEventListener("click",()=>{const input=$("customerPassword"),show=input.type==="password";input.type=show?"text":"password";$("toggleCustomerPassword").textContent=show?"Hide":"Show";});
   }
+
 
   // REGISTRATION
   async function initRegistration() {
-    const form=$("registerForm"),msg=$("message");
-    if(!form)return;
-    let agreement=null;
-    let regToken=sessionStorage.getItem("sarksh_registration_token")||"";
-    let customerId=sessionStorage.getItem("sarksh_registration_customer")||"";
-    let liveSessionId="";
-    let pollTimer=null;
-
-    const setQueueStatus=(title,subtitle,cls="")=>{
-      const box=$("liveKycStatus");if(!box)return;
-      box.className=`waiting-card ${cls}`.trim();
-      box.innerHTML=`<div class="waiting-dot"></div><div><b>${esc(title)}</b><span>${esc(subtitle||"")}</span></div>`;
-    };
-    const unlockVerification=()=>{
-      $("registrationLocked").hidden=true;
-      $("registrationVerificationArea").hidden=false;
-      $("registrationCustomerRef").textContent=`Customer reference: ${customerId}`;
-    };
-    const renderRegDocs=(docs=[])=>{
-      $("registrationDocStatus").innerHTML=docs.map(d=>`<div class="document-item"><div><strong>${esc(d.document_type)}</strong><span>${esc(d.file_name||"Uploaded")} · ${esc(d.status||"RECEIVED")}</span></div><span class="status-pill success">Stored</span></div>`).join("");
-    };
-    async function refreshResume(){
-      if(!regToken)return;
-      try{
-        const r=await api("registrationResumeStatus",{registration_token:regToken});
-        customerId=r.customer_id;sessionStorage.setItem("sarksh_registration_customer",customerId);
-        unlockVerification();renderRegDocs(r.documents||[]);
-        if(r.meet?.session_id){liveSessionId=r.meet.session_id;startMeetPolling();}
-        $("joinMeetKycQueue").disabled=!r.ready_for_queue || !r.kyc_desk?.accepting || Boolean(r.meet?.session_id);
-        if(r.ready_for_queue && !r.meet?.session_id)setQueueStatus(r.kyc_desk?.accepting?"Documents ready":"KYC desk is sleeping",r.kyc_desk?.message||(r.kyc_desk?.accepting?"Join the KYC verification queue.":"Your documents are ready; live KYC intake is paused."),r.kyc_desk?.accepting?"":"waiting");
-      }catch(_){sessionStorage.removeItem("sarksh_registration_token");sessionStorage.removeItem("sarksh_registration_customer");regToken="";}
-    }
-    async function pollMeet(){
-      if(!regToken||!liveSessionId)return;
-      try{
-        const r=await api("liveKycStatus",{registration_token:regToken,session_id:liveSessionId});
-        const s=r.session;
-        if(s.meet_url){
-          setQueueStatus("KYC agent connected","Your Google Meet is ready. Join the live verification now.","live");
-          $("registrationMeetLink").href=s.meet_url;$("registrationMeetLink").hidden=false;
-        }else if(s.status==="WAITING_AGENT"){
-          setQueueStatus(r.desk_accepting?"Waiting for a KYC agent":"KYC queue is sleeping",r.desk_accepting?`Queue position: ${r.queue_position||1}. Keep this page open.`:(r.desk_message||"Your place is preserved; agents are not accepting KYC right now."),"waiting");
-        }else if(["AGENT_JOINING","MEET_PENDING"].includes(s.status)){
-          setQueueStatus("Agent accepted your request","Google Meet is being prepared…","waiting");
-        }else if(s.status==="COMPLETED"){
-          clearInterval(pollTimer);pollTimer=null;
-          if(s.result==="VERIFIED"){
-            setQueueStatus("KYC verified","Your account has been activated.","live");
-            setTimeout(()=>{sessionStorage.removeItem("sarksh_registration_token");sessionStorage.removeItem("sarksh_registration_customer");location.href="login.html";},1800);
-          }else{
-            setQueueStatus("Verification requires attention",s.remarks||s.result,"failed");
-            if(s.result==="RESUBMIT")$("joinMeetKycQueue").disabled=false;
-          }
-        }
-      }catch(err){console.warn(err.message);}
-    }
-    function startMeetPolling(){if(pollTimer)clearInterval(pollTimer);pollMeet();pollTimer=setInterval(pollMeet,3000);}
-
-    api("getRegistrationAgreement").then(r=>{
-      agreement=r.agreement;$("agreementVersion").value=agreement.version||"";$("agreementHash").value=agreement.hash||"";
-      $("agreementBox").textContent=agreement.text||"Agreement is not configured.";
-      $("agreementState").innerHTML=`<b>${esc(agreement.title||"Registration Agreement")} · ${esc(agreement.version||"")}</b><p>${agreement.ready?"Read the full agreement before acceptance.":"Registration is disabled until the Super Admin publishes the agreement."}</p>`;
-      $("beginRegistration").disabled=!agreement.ready;
-    }).catch(err=>setMessage(msg,err.message,"error"));
-
-    refreshResume();
-
-    form.addEventListener("submit",async e=>{
-      e.preventDefault();const f=new FormData(form);
-      if(!agreement?.ready)return setMessage(msg,"Registration agreement is not active.","error");
-      if(f.get("password")!==f.get("confirm_password"))return setMessage(msg,"Passwords do not match.","error");
-      if(String(f.get("accepted_name")||"").trim().toLowerCase()!==String(f.get("full_name")||"").trim().toLowerCase())
-        return setMessage(msg,"The typed agreement name must match the full legal name.","error");
-      try{
-        setMessage(msg,"Creating secure registration and KYC record…");
-        const r=await api("registerCustomer",{
-          full_name:f.get("full_name"),mobile:f.get("mobile"),email:f.get("email"),password:f.get("password"),
-          pan:String(f.get("pan")||"").toUpperCase(),dob:f.get("dob"),address:f.get("address"),
-          aadhaar_number:String(f.get("aadhaar_number")||""),identity_ref:f.get("identity_ref"),
-          agreement_hash:f.get("agreement_hash"),agreement_version:f.get("agreement_version"),
-          accepted_name:f.get("accepted_name"),agreement_consent:Boolean(f.get("agreement_consent")),user_agent:navigator.userAgent
-        });
-        regToken=r.registration_token;customerId=r.customer_id;
-        sessionStorage.setItem("sarksh_registration_token",regToken);sessionStorage.setItem("sarksh_registration_customer",customerId);
-        form.querySelectorAll("input,textarea,button").forEach(el=>el.disabled=true);
-        unlockVerification();
-        setMessage(msg,`Registration created. Customer reference: ${customerId}. Upload KYC documents to continue.`,"success");
-      }catch(err){setMessage(msg,err.message,"error");}
-    });
-
-    $("registrationDocumentsForm")?.addEventListener("submit",async e=>{
-      e.preventDefault();if(!regToken)return;
-      const f=new FormData(e.currentTarget),pan=f.get("pan_document"),aad=f.get("aadhaar_document"),addr=f.get("address_document");
-      try{
-        setMessage($("registrationDocsMessage"),"Uploading documents securely…");
-        const uploads=[["PAN_CARD",pan],["AADHAAR",aad],["ADDRESS_PROOF",addr]].filter(([,file])=>file&&file.size);
-        for(const [type,file] of uploads){
-          const fp=await filePayload(file);
-          await api("uploadRegistrationDocument",{registration_token:regToken,document_type:type,...fp});
-        }
-        const r=await api("registrationResumeStatus",{registration_token:regToken});
-        renderRegDocs(r.documents||[]);
-        if(!r.ready_for_queue)throw new Error(r.queue_requirement||"Required KYC documents are incomplete.");
-        $("joinMeetKycQueue").disabled=false;
-        setQueueStatus("Documents received","You can now join the live Google Meet verification queue.");
-        setMessage($("registrationDocsMessage"),"KYC documents stored successfully.","success");
-      }catch(err){setMessage($("registrationDocsMessage"),err.message,"error");}
-    });
-
-    $("joinMeetKycQueue")?.addEventListener("click",async()=>{
-      try{
-        const r=await api("createLiveKycSession",{registration_token:regToken});
-        liveSessionId=r.session_id;$("joinMeetKycQueue").disabled=true;
-        setQueueStatus("Waiting for a KYC agent","Keep this page open. The Meet link will appear when an agent accepts.","waiting");
-        startMeetPolling();
-      }catch(err){setMessage($("registrationDocsMessage"),err.message,"error");}
+    const form=$("registerForm"),msg=$("message");if(!form)return;let agreement=null;
+    try{
+      const r=await api("getRegistrationAgreement");agreement=r.agreement||{};
+      $("agreementVersion").value=agreement.version||"";$("agreementHash").value=agreement.hash||"";
+      const state=$("agreementState"),box=$("agreementBox"),accept=$("registrationAgreementAcceptance");
+      if(agreement.ready){state.innerHTML=`<b>${esc(agreement.title||"Customer Agreement")} · Version ${esc(agreement.version||"")}</b><p>Please review the current ${esc(agreement.company_name||"SARKSH")} agreement before creating your account.</p>`;box.textContent=agreement.text||"";box.hidden=false;accept.hidden=false;}
+      else{state.innerHTML='<b>No agreement is currently awaiting acceptance.</b><p>You can create your account now. If a customer agreement is published later, it will appear as an account notification after you sign in.</p>';box.hidden=true;accept.hidden=true;}
+    }catch(err){setMessage(msg,"We could not check the current agreement. Please retry before creating the account.","error");$("beginRegistration").disabled=true;return;}
+    form.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(form);if(f.get("password")!==f.get("confirm_password"))return setMessage(msg,"Passwords do not match.","error");
+      if(agreement?.ready){if(!f.get("agreement_consent"))return setMessage(msg,"Please confirm that you accept the current agreement.","error");if(String(f.get("accepted_name")||"").trim().toLowerCase()!==String(f.get("full_name")||"").trim().toLowerCase())return setMessage(msg,"The agreement name must match your full legal name.","error");}
+      $("beginRegistration").disabled=true;setMessage(msg,"Creating your customer account…");
+      try{const r=await api("registerCustomer",{full_name:f.get("full_name"),mobile:f.get("mobile"),email:f.get("email"),password:f.get("password"),agreement_hash:f.get("agreement_hash"),agreement_version:f.get("agreement_version"),accepted_name:f.get("accepted_name"),agreement_consent:Boolean(f.get("agreement_consent")),user_agent:navigator.userAgent});
+        form.hidden=true;setMessage(msg,`Account created successfully. Your Customer ID is ${r.customer_id}. Redirecting to secure login…`,"success");sessionStorage.removeItem("sarksh_registration_token");sessionStorage.removeItem("sarksh_registration_customer");setTimeout(()=>location.href="login.html",2200);
+      }catch(err){setMessage(msg,err.message,"error");$("beginRegistration").disabled=false;}
     });
   }
+
 
 
 
@@ -330,85 +239,31 @@
 
   // CUSTOMER KYC + VIDEO
   async function initCustomerKyc() {
-    const form=$("kycForm");if(!form)return;
-    const token=requireCustomer();if(!token)return;
-    const msg=$("message");
-    const renderDocs=docs=>{
-      $("customerDocuments").innerHTML=(docs||[]).map(d=>`<div class="document-item"><div><strong>${esc(d.document_type)}</strong><span>${esc(d.file_name||"Document")} · ${esc(d.status||"RECEIVED")}</span></div><span class="status-pill">${esc(d.status||"RECEIVED")}</span></div>`).join("")||'<div class="muted">No KYC documents uploaded yet.</div>';
-    };
-    async function load(){
-      try{
-        const r=await api("getKycCenter",{token});
-        $("kycStatus").textContent=r.kyc?.status||"NOT SUBMITTED";
-        if(r.kyc){
-          form.pan.value=r.kyc.pan||"";form.dob.value=r.kyc.dob||"";form.address.value=r.kyc.address||"";form.identity_ref.value=r.kyc.identity_ref||"";
-          $("aadhaarMasked").value=r.kyc.aadhaar_masked||"Not provided";
-        }
-        renderDocs(r.documents||[]);
-        renderMeet(r.meet||null);
-      }catch(err){if(!sessionFailure(err))setMessage(msg,err.message,"error");}
+    const form=$("kycForm");if(!form)return;const token=requireCustomer();if(!token)return;const msg=$("message");
+    const renderDocs=docs=>{$("customerDocuments").innerHTML=(docs||[]).map(d=>`<div class="document-item"><div><strong>${esc(d.document_type.replaceAll("_"," "))}</strong><span>${esc(d.file_name||"Document")} · ${esc(d.status||"RECEIVED")}</span></div><span class="status-pill">${esc(d.status||"RECEIVED")}</span></div>`).join("")||'<div class="alert">You have not uploaded any KYC documents yet.</div>';};
+    function renderMeet(meet,desk){const pill=$("customerMeetPill"),box=$("customerMeetStatus"),link=$("joinCustomerMeet"),request=$("requestMeetKyc");
+      if(meet?.meet_url){pill.textContent="MEETING READY";pill.className="status-pill success";box.className="meet-status-box ready";box.innerHTML='<b>Your live KYC meeting is ready.</b><p>Join using the button below at the agreed time.</p>';link.href=meet.meet_url;link.hidden=false;request.disabled=true;request.textContent="KYC request active";return;}
+      link.hidden=true;if(meet){pill.textContent=meet.status||"WAITING";pill.className="status-pill warning";box.className="meet-status-box waiting";box.innerHTML='<b>Your live KYC request is in progress.</b><p>Keep checking this page. The meeting link will appear once your KYC agent publishes it.</p>';request.disabled=true;request.textContent="Request already submitted";return;}
+      const accepting=Boolean(desk?.accepting);pill.textContent=accepting?"AVAILABLE":"PAUSED";pill.className=`status-pill ${accepting?"success":""}`;box.className=`meet-status-box ${accepting?"ready":"waiting"}`;box.innerHTML=`<b>${accepting?"Live KYC desk is accepting requests.":"Live KYC is currently paused."}</b><p>${esc(desk?.message || (accepting?"Request verification after completing your KYC details and required documents.":"Your saved KYC information is safe. Check again when the desk reopens."))}</p>`;request.disabled=!accepting;request.textContent=accepting?"Request live KYC":"Live KYC paused";
     }
-    function renderMeet(meet){
-      const pill=$("customerMeetPill"),box=$("customerMeetStatus"),link=$("joinCustomerMeet");
-      if(!meet){pill.textContent="No active session";box.className="meet-status-box";box.textContent="No live KYC session is currently active.";link.hidden=true;return;}
-      pill.textContent=meet.status||"KYC";box.className=`meet-status-box ${meet.meet_url?"ready":"waiting"}`;
-      box.textContent=meet.meet_url?"Your Google Meet is ready. Join the KYC agent for live verification.":"Your KYC request is waiting for an authorised agent.";
-      if(meet.meet_url){link.href=meet.meet_url;link.hidden=false}else link.hidden=true;
-    }
-    form.addEventListener("submit",async e=>{
-      e.preventDefault();const f=new FormData(form);
-      try{
-        await api("submitKyc",{token,pan:String(f.get("pan")||"").toUpperCase(),dob:f.get("dob"),address:f.get("address"),identity_ref:f.get("identity_ref"),aadhaar_number:String(f.get("aadhaar_number")||"")});
-        form.aadhaar_number.value="";setMessage(msg,"KYC information updated securely.","success");await load();
-      }catch(err){setMessage(msg,err.message,"error");}
-    });
-    $("customerDocumentForm")?.addEventListener("submit",async e=>{
-      e.preventDefault();const f=new FormData(e.currentTarget);
-      try{
-        const fp=await filePayload(f.get("document"));
-        await api("uploadCustomerDocument",{token,document_type:f.get("document_type"),reference:f.get("reference"),...fp});
-        e.currentTarget.reset();setMessage($("documentMessage"),"Document uploaded securely.","success");await load();
-      }catch(err){setMessage($("documentMessage"),err.message,"error");}
-    });
-    $("requestMeetKyc")?.addEventListener("click",async()=>{
-      try{await api("requestCustomerMeetKyc",{token});setMessage($("documentMessage"),"Live KYC request placed.","success");await load();}
-      catch(err){setMessage($("documentMessage"),err.message,"error");}
-    });
-    load();setInterval(async()=>{try{const r=await api("customerMeetKycStatus",{token});renderMeet(r.meet||null);}catch(_){}},5000);
+    async function load(){try{const r=await api("getKycCenter",{token});$("kycStatus").textContent=r.kyc?.status||"NOT SUBMITTED";if(r.kyc){form.pan.value=r.kyc.pan||"";form.dob.value=r.kyc.dob||"";form.address.value=r.kyc.address||"";form.identity_ref.value=r.kyc.identity_ref||"";$("aadhaarMasked").value=r.kyc.aadhaar_masked||"Not provided";}renderDocs(r.documents||[]);renderMeet(r.meet||null,r.kyc_desk||{});}catch(err){if(!sessionFailure(err))setMessage(msg,"We could not load your KYC details. Please retry.","error");}}
+    form.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(form);const pan=String(f.get("pan")||"").toUpperCase().trim();if(pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan))return setMessage(msg,"PAN should look like ABCDE1234F.","error");try{await api("submitKyc",{token,pan,dob:f.get("dob"),address:f.get("address"),identity_ref:f.get("identity_ref"),aadhaar_number:String(f.get("aadhaar_number")||"")});form.aadhaar_number.value="";setMessage(msg,"Identity details saved.","success");await load();}catch(err){setMessage(msg,err.message,"error");}});
+    $("customerDocumentForm")?.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{const fp=await filePayload(f.get("document"));await api("uploadCustomerDocument",{token,document_type:f.get("document_type"),reference:f.get("reference"),...fp});e.currentTarget.reset();setMessage($("documentMessage"),"Document added to your private vault.","success");await load();}catch(err){setMessage($("documentMessage"),err.message,"error");}});
+    $("requestMeetKyc")?.addEventListener("click",async()=>{try{await api("requestCustomerMeetKyc",{token});setMessage($("documentMessage"),"Live KYC request submitted. We will show the meeting link here when it is ready.","success");await load();}catch(err){setMessage($("documentMessage"),err.message,"error");}});
+    await load();setInterval(async()=>{try{const r=await api("customerMeetKycStatus",{token});renderMeet(r.meet||null,r.kyc_desk||{});}catch(_){}},10000);
   }
+
 
 
 
   async function initCustomerSettings(){
-    const form=$("customerSettingsForm");if(!form)return;
-    const token=requireCustomer();if(!token)return;
-    try{
-      const r=await api("customerSettingsGet",{token}),s=r.settings||{},c=r.customer||{};
-      $("settingsFullName").value=c.full_name||"";$("settingsEmail").value=c.email||"";$("settingsAccountStatus").textContent=c.account_status||"";
-      form.preferred_name.value=s.preferred_name||"";form.mobile.value=c.mobile||"";form.address.value=c.address||"";
-      form.email_notifications.checked=String(s.email_notifications)!=="FALSE";
-      form.trade_notifications.checked=String(s.trade_notifications)==="TRUE";
-      form.compact_dashboard.checked=String(s.compact_dashboard)==="TRUE";
-      form.show_trade_quality.checked=String(s.show_trade_quality)!=="FALSE";
-    }catch(err){if(!sessionFailure(err))setMessage($("settingsMessage"),err.message,"error");}
-    form.addEventListener("submit",async e=>{
-      e.preventDefault();const f=new FormData(form);
-      try{
-        await api("customerSettingsSave",{token,preferred_name:f.get("preferred_name"),mobile:f.get("mobile"),address:f.get("address"),
-          email_notifications:Boolean(f.get("email_notifications")),trade_notifications:Boolean(f.get("trade_notifications")),
-          compact_dashboard:Boolean(f.get("compact_dashboard")),show_trade_quality:Boolean(f.get("show_trade_quality"))});
-        setMessage($("settingsMessage"),"Account settings saved.","success");
-      }catch(err){setMessage($("settingsMessage"),err.message,"error");}
-    });
-    $("changePasswordForm")?.addEventListener("submit",async e=>{
-      e.preventDefault();const f=new FormData(e.currentTarget);
-      if(f.get("new_password")!==f.get("confirm_password"))return setMessage($("passwordMessage"),"New passwords do not match.","error");
-      try{
-        await api("customerChangePassword",{token,current_password:f.get("current_password"),new_password:f.get("new_password")});
-        e.currentTarget.reset();setMessage($("passwordMessage"),"Password changed. Other sessions were revoked.","success");
-      }catch(err){setMessage($("passwordMessage"),err.message,"error");}
-    });
+    const form=$("customerSettingsForm");if(!form)return;const token=requireCustomer();if(!token)return;
+    try{const r=await api("customerSettingsGet",{token}),s=r.settings||{},c=r.customer||{};$("settingsFullName").value=c.full_name||"";$("settingsEmail").value=c.email||"";$("settingsAccountStatus").textContent=c.account_status||"";form.preferred_name.value=s.preferred_name||"";form.mobile.value=c.mobile||"";form.address.value=c.address||"";form.email_notifications.checked=String(s.email_notifications)!=="FALSE";form.trade_notifications.checked=String(s.trade_notifications)==="TRUE";form.compact_dashboard.checked=String(s.compact_dashboard)==="TRUE";form.show_trade_quality.checked=String(s.show_trade_quality)!=="FALSE";}catch(err){if(!sessionFailure(err))setMessage($("settingsMessage"),err.message,"error");}
+    form.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(form);try{await api("customerSettingsSave",{token,preferred_name:f.get("preferred_name"),mobile:f.get("mobile"),address:f.get("address"),email_notifications:Boolean(f.get("email_notifications")),trade_notifications:Boolean(f.get("trade_notifications")),compact_dashboard:Boolean(f.get("compact_dashboard")),show_trade_quality:Boolean(f.get("show_trade_quality"))});setMessage($("settingsMessage"),"Account settings saved.","success");}catch(err){setMessage($("settingsMessage"),err.message,"error");}});
+    $("changePasswordForm")?.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.currentTarget);if(f.get("new_password")!==f.get("confirm_password"))return setMessage($("passwordMessage"),"New passwords do not match.","error");try{await api("customerChangePassword",{token,current_password:f.get("current_password"),new_password:f.get("new_password")});e.currentTarget.reset();setMessage($("passwordMessage"),"Password changed. Other signed-in sessions were revoked.","success");}catch(err){setMessage($("passwordMessage"),err.message,"error");}});
+    $("signOutOtherDevices")?.addEventListener("click",async()=>{try{const r=await api("customerSignOutOtherSessions",{token});setMessage($("securityMessage"),`${r.revoked||0} other session(s) signed out.`,"success");}catch(err){setMessage($("securityMessage"),err.message,"error");}});
   }
+
 
   async function initCustomerTeam(){
     const box=$("customerTeamCards");if(!box)return;
@@ -610,29 +465,17 @@
   }
 
   async function initAccounts() {
-    const tbody=$("accountRows"); if(!tbody) return;
-    try {
-      const r=await adminCall("adminAccounts");
-      let rows=r.accounts||[];
-      const render=arr=>tbody.innerHTML=arr.map(c=>`<tr><td><b>${esc(c.customer_id)}</b></td><td>${esc(c.full_name)}</td>
-        <td>${esc(c.account_status)}</td><td>${money(c.current_amount)}</td>
-        <td class="${Number(c.net_pnl)>=0?"pnl-pos":"pnl-neg"}">${money(c.net_pnl)}</td><td>${esc(c.total_trades)}</td></tr>`).join("")
-        ||'<tr><td colspan="6">No accounts found.</td></tr>';
-      render(rows);
-      $("accountSearch")?.addEventListener("input",()=>{
-        const q=$("accountSearch").value.toLowerCase();
-        render(rows.filter(c=>JSON.stringify(c).toLowerCase().includes(q)));
-      });
-      $("ledgerForm")?.addEventListener("submit",async e=>{
-        e.preventDefault();
-        try{
-          const x=await adminCall("adminLedgerEntry",Object.fromEntries(new FormData($("ledgerForm"))));
-          setMessage($("ledgerMessage"),`Ledger entry posted. Current amount: ${money(x.current_amount)}`,"success");
-          setTimeout(()=>location.reload(),600);
-        }catch(err){setMessage($("ledgerMessage"),err.message,"error");}
-      });
-    } catch(err){if(!sessionFailure(err)) alert(err.message);}
+    const tbody=$("accountRows");if(!tbody)return;const select=$("ledgerCustomerSelect");
+    try{
+      const r=await adminCall("adminAccounts");let rows=r.accounts||[];
+      if(select){select.innerHTML='<option value="">Select customer</option>'+rows.slice().sort((a,b)=>String(a.full_name).localeCompare(String(b.full_name))).map(c=>`<option value="${esc(c.customer_id)}">${esc(c.full_name)} — ${esc(c.customer_id)} — ${money(c.current_amount)}</option>`).join("");}
+      const render=arr=>tbody.innerHTML=arr.map(c=>`<tr class="account-row-clickable" data-account-customer="${esc(c.customer_id)}"><td><b>${esc(c.customer_id)}</b></td><td>${esc(c.full_name)}</td><td>${esc(c.account_status)}</td><td>${money(c.current_amount)}</td><td class="${Number(c.net_pnl)>=0?"pnl-pos":"pnl-neg"}">${money(c.net_pnl)}</td><td>${esc(c.total_trades)}</td></tr>`).join("")||'<tr><td colspan="6">No accounts found.</td></tr>';
+      render(rows);$("accountSearch")?.addEventListener("input",()=>{const q=$("accountSearch").value.toLowerCase();render(rows.filter(c=>JSON.stringify(c).toLowerCase().includes(q)));});
+      tbody.addEventListener("click",e=>{const row=e.target.closest("[data-account-customer]");if(row&&select){select.value=row.dataset.accountCustomer;select.scrollIntoView({behavior:"smooth",block:"center"});select.focus();}});
+      $("ledgerForm")?.addEventListener("submit",async e=>{e.preventDefault();try{const x=await adminCall("adminLedgerEntry",Object.fromEntries(new FormData($("ledgerForm"))));setMessage($("ledgerMessage"),`Ledger entry posted. Current amount: ${money(x.current_amount)}`,"success");const updated=await adminCall("adminAccounts");rows=updated.accounts||rows;render(rows);}catch(err){setMessage($("ledgerMessage"),err.message,"error");}});
+    }catch(err){if(!sessionFailure(err)){tbody.innerHTML=`<tr class="table-error"><td colspan="6">Could not load customer accounts: ${esc(err.message)} <button class="btn ghost" onclick="location.reload()">Retry</button></td></tr>`;}}
   }
+
 
   function csvDownload(name, rows) {
     if (!rows.length) throw new Error("No records to export.");
@@ -802,6 +645,7 @@
     await initCustomerTeam();
     await initCustomerAgreement();
     await initCustomerNotificationCenter();
+    initCustomerResponsiveNavigation();
     initAdminCustomerTeamAssignment();
   }
 

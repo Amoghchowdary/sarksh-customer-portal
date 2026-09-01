@@ -11,14 +11,14 @@
 <section class="content-grid">
 <article class="panel"><p class="eyebrow">LEDGER ENTRY</p><h2>Credit / debit customer account</h2>
 <form id="ledgerForm" class="stack">
-<label>Customer ID<input name="customer_id" required placeholder="SAR…"/></label>
+<label>Customer <select id="ledgerCustomerSelect" name="customer_id" required><option value="">Select customer</option></select><small class="field-help inline-help">Choose the customer by name or Customer ID. No copying or pasting required.</small></label>
 <div class="grid2"><label>Type<select name="type"><option>OPENING_BALANCE</option><option>CREDIT</option><option>DEBIT</option><option>WITHDRAWAL</option><option>ADJUSTMENT</option></select></label><label>Amount<input name="amount" type="number" step="0.01" required/></label></div>
 <label>Description<input name="description" required placeholder="Reason / reference"/></label>
 <button class="btn primary" type="submit">Post Ledger Entry</button></form><div id="ledgerMessage" class="form-message"></div>
 </article>
 <article class="panel span2"><div class="panel-head"><div><p class="eyebrow">ACCOUNT MONITOR</p><h2>Customer balances</h2></div><input id="accountSearch" placeholder="Search customer…"/></div>
-<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Name</th><th>Status</th><th>Current Amount</th><th>Trade P&L</th><th>Trades</th></tr></thead><tbody id="accountRows"><tr><td colspan="6">Loading…</td></tr></tbody></table></div></article>
+<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Name</th><th>Status</th><th>Current Amount</th><th>Trade P&L</th><th>Trades</th></tr></thead><tbody id="accountRows"><tr class="table-loading"><td colspan="6"><div class="loading-line"></div></td></tr></tbody></table></div></article>
 </section></main></div>
 
-  <script src="../js/app.js?v=9.0.0"></script>
+  <script src="../js/app.js?v=10.0.0"></script>
 </body></html>
